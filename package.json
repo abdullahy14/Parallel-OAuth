@@ -1,0 +1,28 @@
+{
+  "name": "genesys-auth-token-service",
+  "version": "1.0.0",
+  "description": "Production-ready Next.js microservice for Genesys Cloud authentication token retrieval via Microsoft Entra ID SSO",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@sparticuz/chromium-min": "123.0.1",
+    "next": "16.4.5",
+    "puppeteer-core": "25.16.0",
+    "react": "19.1.0",
+    "react-dom": "19.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "20.14.10",
+    "@types/react": "19.1.8",
+    "@types/react-dom": "19.1.6",
+    "typescript": "5.5.3"
+  },
+  "engines": {
+    "node": ">=18.17.0"
+  }
+}
