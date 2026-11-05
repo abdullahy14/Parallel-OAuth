@@ -12,6 +12,8 @@ export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
   const mode = (req.nextUrl.searchParams.get("mode") as "screencast" | "native") || "screencast";
+  const email = req.nextUrl.searchParams.get("email") || undefined;
+  const password = req.nextUrl.searchParams.get("password") || undefined;
 
   const encoder = new TextEncoder();
   let sessionClosed = false;
@@ -40,7 +42,11 @@ export async function GET(req: NextRequest) {
       }
 
       try {
-        const session = await startInteractiveSession(mode, sendEvent);
+        const session = await startInteractiveSession(
+          mode,
+          { email, password },
+          sendEvent
+        );
 
         req.signal.addEventListener("abort", () => {
           sessionClosed = true;

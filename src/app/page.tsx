@@ -27,6 +27,8 @@ export default function Home() {
   const [showJson, setShowJson] = useState(false);
   const [showToken, setShowToken] = useState(false);
   const [timeLeft, setTimeLeft] = useState<number | null>(null);
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
   const [quickText, setQuickText] = useState("");
   const [clickIndicator, setClickIndicator] = useState<ClickFeedback | null>(null);
   const [actionStatus, setActionStatus] = useState<string | null>(null);
@@ -52,7 +54,7 @@ export default function Home() {
     };
   }, []);
 
-  function startSession() {
+  function startSession(emailOverride?: string, passwordOverride?: string) {
     setSessionActive(true);
     setErrorMsg(null);
     setTokenData(null);
@@ -64,7 +66,14 @@ export default function Home() {
       eventSourceRef.current.close();
     }
 
-    const es = new EventSource("/api/stream?mode=screencast");
+    const emailParam = emailOverride ?? authEmail;
+    const passwordParam = passwordOverride ?? authPassword;
+
+    let url = "/api/stream?mode=screencast";
+    if (emailParam) url += `&email=${encodeURIComponent(emailParam)}`;
+    if (passwordParam) url += `&password=${encodeURIComponent(passwordParam)}`;
+
+    const es = new EventSource(url);
     eventSourceRef.current = es;
 
     es.onmessage = (e) => {
@@ -404,29 +413,92 @@ export default function Home() {
         </div>
       )}
 
-      {/* PRIMARY LAUNCH BUTTON (When session is idle) */}
+      {/* PRIMARY LAUNCH CARD (When session is idle) */}
       {!sessionActive && (
-        <div style={{ display: "flex", justifyContent: "center", marginBottom: 20 }}>
+        <div
+          style={{
+            width: "100%",
+            maxWidth: 480,
+            background: "#0f172a",
+            border: "1px solid #1e293b",
+            borderRadius: 16,
+            padding: 28,
+            boxShadow: "0 10px 30px rgba(0,0,0,0.5)",
+            marginBottom: 20,
+          }}
+        >
+          <div style={{ marginBottom: 16 }}>
+            <label style={{ display: "block", fontSize: 13, color: "#94a3b8", marginBottom: 6 }}>
+              Work Email (Optional for auto-fill):
+            </label>
+            <input
+              type="email"
+              placeholder="e.g. name@hellofresh.com"
+              value={authEmail}
+              onChange={(e) => setAuthEmail(e.target.value)}
+              style={{
+                width: "100%",
+                padding: "10px 14px",
+                background: "#020617",
+                border: "1px solid #334155",
+                borderRadius: 8,
+                color: "#e2e8f0",
+                fontSize: 14,
+                outline: "none",
+                boxSizing: "border-box",
+              }}
+            />
+          </div>
+
+          <div style={{ marginBottom: 20 }}>
+            <label style={{ display: "block", fontSize: 13, color: "#94a3b8", marginBottom: 6 }}>
+              Password (Optional for auto-fill):
+            </label>
+            <input
+              type="password"
+              placeholder="••••••••••••"
+              value={authPassword}
+              onChange={(e) => setAuthPassword(e.target.value)}
+              style={{
+                width: "100%",
+                padding: "10px 14px",
+                background: "#020617",
+                border: "1px solid #334155",
+                borderRadius: 8,
+                color: "#e2e8f0",
+                fontSize: 14,
+                outline: "none",
+                boxSizing: "border-box",
+              }}
+            />
+          </div>
+
           <button
-            onClick={startSession}
+            onClick={() => startSession()}
             style={{
-              padding: "16px 36px",
+              width: "100%",
+              padding: "14px 24px",
               background: "linear-gradient(135deg, #2563eb, #1d4ed8)",
               border: "none",
-              borderRadius: 12,
+              borderRadius: 10,
               color: "#fff",
-              fontSize: 16,
+              fontSize: 15,
               fontWeight: 700,
               cursor: "pointer",
-              boxShadow: "0 6px 20px rgba(37, 99, 235, 0.45)",
+              boxShadow: "0 4px 14px rgba(37, 99, 235, 0.4)",
               display: "flex",
               alignItems: "center",
+              justifyContent: "center",
               gap: 10,
-              letterSpacing: "0.2px",
             }}
           >
             <span>☁️</span> Launch Cloud Authentication Session
           </button>
+
+          <p style={{ margin: "14px 0 0 0", fontSize: 12, color: "#64748b", textAlign: "center", lineHeight: 1.5 }}>
+            Automates the Microsoft SSO entry and streams the live browser session.
+            Approve on your Authenticator app if prompted.
+          </p>
         </div>
       )}
 
