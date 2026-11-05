@@ -57,7 +57,7 @@ export async function startInteractiveSession(
     currentSession = null;
   }
 
-  const { executablePath, browserName, isCloud, args: resolvedArgs } =
+  const { executablePath, browserName, isCloud, args: resolvedArgs, env: resolvedEnv } =
     await resolveBrowserExecutable();
 
   const width = 1080;
@@ -82,6 +82,7 @@ export async function startInteractiveSession(
     headless: isHeadless,
     defaultViewport: { width, height },
     args: launchArgs,
+    env: resolvedEnv,
     ignoreDefaultArgs: ["--enable-automation"],
   });
 

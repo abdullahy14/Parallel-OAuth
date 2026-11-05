@@ -374,8 +374,6 @@ export default function Home() {
         <div
           style={{
             display: "flex",
-            gap: 14,
-            flexWrap: "wrap",
             justifyContent: "center",
             marginBottom: 20,
           }}
@@ -383,34 +381,22 @@ export default function Home() {
           <button
             onClick={() => startSession("screencast")}
             style={{
-              padding: "14px 24px",
+              padding: "16px 36px",
               background: "linear-gradient(135deg, #2563eb, #1d4ed8)",
               border: "none",
-              borderRadius: 10,
+              borderRadius: 12,
               color: "#fff",
-              fontSize: 15,
-              fontWeight: 600,
+              fontSize: 16,
+              fontWeight: 700,
               cursor: "pointer",
-              boxShadow: "0 4px 14px rgba(37, 99, 235, 0.4)",
+              boxShadow: "0 6px 20px rgba(37, 99, 235, 0.45)",
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              letterSpacing: "0.2px",
             }}
           >
-            📺 Open Live Stream Session (Edge / Island / Chrome / Cloud)
-          </button>
-
-          <button
-            onClick={() => startSession("native")}
-            style={{
-              padding: "14px 24px",
-              background: "#1e293b",
-              border: "1px solid #334155",
-              borderRadius: 10,
-              color: "#e2e8f0",
-              fontSize: 15,
-              fontWeight: 600,
-              cursor: "pointer",
-            }}
-          >
-            🪟 Open Native Desktop Window (Edge / Island / Chrome)
+            <span>☁️</span> Launch Cloud Authentication Session
           </button>
         </div>
       )}
@@ -519,29 +505,6 @@ export default function Home() {
               ⏳ Connecting to browser session and streaming frames...
             </div>
           )}
-        </div>
-      )}
-
-      {/* NATIVE MODE NOTICE */}
-      {sessionActive && sessionMode === "native" && (
-        <div
-          style={{
-            maxWidth: 640,
-            width: "100%",
-            background: "#0f172a",
-            border: "1px solid #334155",
-            borderRadius: 12,
-            padding: 24,
-            textAlign: "center",
-          }}
-        >
-          <div style={{ fontSize: 32, marginBottom: 12 }}>🪟</div>
-          <h3 style={{ fontSize: 16, margin: "0 0 8px 0" }}>Chrome Window Open on Your Desktop</h3>
-          <p style={{ fontSize: 13, color: "#94a3b8", lineHeight: 1.6 }}>
-            A visible Chrome window has opened at the Genesys Cloud login page. Complete your Microsoft SSO sign-in there.
-            <br />
-            As soon as you sign in, the window will automatically close and your 12-hour token will appear right here.
-          </p>
         </div>
       )}
     </main>

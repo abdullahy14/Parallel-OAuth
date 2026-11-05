@@ -81,10 +81,11 @@ export async function launchBrowser(): Promise<Browser> {
   const puppeteer = (await import("puppeteer-core")).default;
   const { resolveBrowserExecutable } = await import("./detect-browser");
 
-  const { executablePath, args } = await resolveBrowserExecutable();
+  const { executablePath, args, env } = await resolveBrowserExecutable();
 
   return puppeteer.launch({
     args,
+    env,
     ignoreDefaultArgs: ["--enable-automation"],
     executablePath,
     headless: true,
