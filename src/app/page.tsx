@@ -10,10 +10,15 @@ interface TokenPayload {
   cachedUntil: string;
 }
 
+interface ClickFeedback {
+  x: number;
+  y: number;
+  id: number;
+}
+
 export default function Home() {
   const [sessionActive, setSessionActive] = useState(false);
-  const [sessionMode, setSessionMode] = useState<"screencast" | "native">("screencast");
-  const [statusMsg, setStatusMsg] = useState("Ready to launch live authentication session.");
+  const [statusMsg, setStatusMsg] = useState("Ready to launch cloud authentication session.");
   const [frameSrc, setFrameSrc] = useState<string | null>(null);
   const [tokenData, setTokenData] = useState<TokenPayload | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -22,9 +27,11 @@ export default function Home() {
   const [showJson, setShowJson] = useState(false);
   const [showToken, setShowToken] = useState(false);
   const [timeLeft, setTimeLeft] = useState<number | null>(null);
+  const [quickText, setQuickText] = useState("");
+  const [clickIndicator, setClickIndicator] = useState<ClickFeedback | null>(null);
+  const [actionStatus, setActionStatus] = useState<string | null>(null);
 
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const imageRef = useRef<HTMLImageElement | null>(null);
+  const screenContainerRef = useRef<HTMLDivElement | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
 
   // Expiry countdown timer
@@ -45,19 +52,19 @@ export default function Home() {
     };
   }, []);
 
-  function startSession(mode: "screencast" | "native") {
-    setSessionMode(mode);
+  function startSession() {
     setSessionActive(true);
     setErrorMsg(null);
     setTokenData(null);
     setFrameSrc(null);
-    setStatusMsg(mode === "screencast" ? "Starting live browser stream..." : "Launching Chrome window on desktop...");
+    setActionStatus(null);
+    setStatusMsg("Booting cloud browser session on Vercel...");
 
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
     }
 
-    const es = new EventSource(`/api/stream?mode=${mode}`);
+    const es = new EventSource("/api/stream?mode=screencast");
     eventSourceRef.current = es;
 
     es.onmessage = (e) => {
@@ -65,20 +72,7 @@ export default function Home() {
         const event = JSON.parse(e.data);
 
         if (event.type === "frame" && event.data) {
-          const src = `data:image/jpeg;base64,${event.data}`;
-          setFrameSrc(src);
-
-          const canvas = canvasRef.current;
-          if (canvas) {
-            const ctx = canvas.getContext("2d");
-            const img = new Image();
-            img.onload = () => {
-              canvas.width = img.width;
-              canvas.height = img.height;
-              ctx?.drawImage(img, 0, 0);
-            };
-            img.src = src;
-          }
+          setFrameSrc(`data:image/jpeg;base64,${event.data}`);
         } else if (event.type === "status") {
           setStatusMsg(event.data);
         } else if (event.type === "token" && event.tokenPayload) {
@@ -108,7 +102,7 @@ export default function Home() {
 
     es.onerror = () => {
       if (!tokenData) {
-        setStatusMsg("Connection closed.");
+        setStatusMsg("Connection closed or ended.");
       }
       es.close();
     };
@@ -123,50 +117,91 @@ export default function Home() {
     setStatusMsg("Session stopped.");
   }
 
-  async function handleCanvasClick(e: React.MouseEvent<HTMLCanvasElement>) {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+  async function handleScreenClick(e: React.MouseEvent<HTMLDivElement>) {
+    const container = screenContainerRef.current;
+    if (!container) return;
 
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
+    const rect = container.getBoundingClientRect();
+    const percentX = (e.clientX - rect.left) / rect.width;
+    const percentY = (e.clientY - rect.top) / rect.height;
 
-    const x = (e.clientX - rect.left) * scaleX;
-    const y = (e.clientY - rect.top) * scaleY;
+    // Fixed browser resolution configured in backend
+    const x = Math.round(percentX * 1080);
+    const y = Math.round(percentY * 720);
+
+    // Show visual click ripple indicator
+    setClickIndicator({ x: e.clientX - rect.left, y: e.clientY - rect.top, id: Date.now() });
+    setTimeout(() => setClickIndicator(null), 600);
 
     try {
-      await fetch("/api/stream/action", {
+      setActionStatus(`Clicking at (${x}, ${y})...`);
+      const res = await fetch("/api/stream/action", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ type: "click", x, y }),
       });
-    } catch {
-      // ignore
+      const data = await res.json();
+      if (data.success) {
+        setActionStatus(`Click registered at (${x}, ${y})`);
+      } else {
+        setActionStatus(`Notice: ${data.error ?? "Click error"}`);
+      }
+    } catch (err) {
+      setActionStatus("Network error sending click");
     }
   }
 
-  async function handleCanvasKeyDown(e: React.KeyboardEvent<HTMLCanvasElement>) {
+  async function handleSendQuickText(e: React.FormEvent) {
     e.preventDefault();
+    if (!quickText) return;
+
     try {
-      await fetch("/api/stream/action", {
+      setActionStatus(`Typing text into active field...`);
+      const res = await fetch("/api/stream/action", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "key", key: e.key }),
+        body: JSON.stringify({ type: "typeText", text: quickText }),
       });
+      const data = await res.json();
+      if (data.success) {
+        setActionStatus(`Typed "${quickText.length > 10 ? quickText.slice(0, 10) + '...' : quickText}"`);
+        setQuickText("");
+      }
     } catch {
-      // ignore
+      setActionStatus("Failed to send text");
     }
   }
 
-  async function handleCanvasWheel(e: React.WheelEvent<HTMLCanvasElement>) {
+  async function handleSendKey(key: string) {
     try {
+      setActionStatus(`Pressing ${key}...`);
       await fetch("/api/stream/action", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "scroll", deltaY: e.deltaY }),
+        body: JSON.stringify({ type: "pressKey", key }),
       });
+      setActionStatus(`Pressed ${key}`);
     } catch {
-      // ignore
+      setActionStatus(`Failed to press ${key}`);
+    }
+  }
+
+  async function handleAutoSso() {
+    try {
+      setActionStatus("Looking for Microsoft / SSO button on page...");
+      const res = await fetch("/api/stream/action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "auto-sso" }),
+      });
+      const data = await res.json();
+      if (data.clicked) {
+        setActionStatus("✓ Clicked Microsoft SSO button successfully!");
+      } else {
+        setActionStatus("SSO button not found yet (page might still be loading)");
+      }
+    } catch {
+      setActionStatus("Failed to trigger Auto SSO");
     }
   }
 
@@ -212,7 +247,7 @@ export default function Home() {
           Genesys Cloud Live Authentication Portal
         </h1>
         <p style={{ margin: 0, fontSize: 14, color: "#94a3b8" }}>
-          Interactive session stream with automatic 12-hour OAuth token capture
+          Cloud session stream with interactive clicks and automatic 12-hour OAuth token capture
         </p>
       </div>
 
@@ -369,17 +404,11 @@ export default function Home() {
         </div>
       )}
 
-      {/* CONTROLS (When session is idle) */}
+      {/* PRIMARY LAUNCH BUTTON (When session is idle) */}
       {!sessionActive && (
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "center",
-            marginBottom: 20,
-          }}
-        >
+        <div style={{ display: "flex", justifyContent: "center", marginBottom: 20 }}>
           <button
-            onClick={() => startSession("screencast")}
+            onClick={startSession}
             style={{
               padding: "16px 36px",
               background: "linear-gradient(135deg, #2563eb, #1d4ed8)",
@@ -401,56 +430,174 @@ export default function Home() {
         </div>
       )}
 
-      {/* ACTIVE SESSION BAR */}
+      {/* ACTIVE SESSION BAR & ASSISTIVE INPUT TOOLBAR */}
       {sessionActive && (
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            width: "100%",
-            maxWidth: 1080,
-            background: "#1e293b",
-            borderRadius: 10,
-            padding: "10px 16px",
-            marginBottom: 14,
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <span
-              style={{
-                width: 10,
-                height: 10,
-                borderRadius: "50%",
-                background: "#22c55e",
-                display: "inline-block",
-                boxShadow: "0 0 8px #22c55e",
-              }}
-            />
-            <span style={{ fontSize: 13, color: "#94a3b8" }}>{statusMsg}</span>
-          </div>
-
-          <button
-            onClick={stopSession}
+        <div style={{ width: "100%", maxWidth: 1080, marginBottom: 12 }}>
+          {/* Top Status & End Bar */}
+          <div
             style={{
-              padding: "6px 14px",
-              background: "#ef4444",
-              border: "none",
-              borderRadius: 6,
-              color: "#fff",
-              fontSize: 12,
-              fontWeight: 600,
-              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              background: "#1e293b",
+              borderRadius: "10px 10px 0 0",
+              padding: "10px 16px",
+              borderBottom: "1px solid #334155",
             }}
           >
-            End Session
-          </button>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span
+                style={{
+                  width: 10,
+                  height: 10,
+                  borderRadius: "50%",
+                  background: "#22c55e",
+                  display: "inline-block",
+                  boxShadow: "0 0 8px #22c55e",
+                }}
+              />
+              <span style={{ fontSize: 13, color: "#cbd5e1" }}>{statusMsg}</span>
+              {actionStatus && (
+                <span
+                  style={{
+                    fontSize: 11,
+                    background: "#0f172a",
+                    border: "1px solid #38bdf8",
+                    color: "#38bdf8",
+                    padding: "2px 8px",
+                    borderRadius: 12,
+                  }}
+                >
+                  {actionStatus}
+                </span>
+              )}
+            </div>
+
+            <button
+              onClick={stopSession}
+              style={{
+                padding: "6px 14px",
+                background: "#ef4444",
+                border: "none",
+                borderRadius: 6,
+                color: "#fff",
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              End Session
+            </button>
+          </div>
+
+          {/* Assistant Action Toolbar (Quick Type / Enter / Auto-SSO) */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              background: "#0f172a",
+              padding: "8px 14px",
+              border: "1px solid #334155",
+              borderTop: "none",
+              flexWrap: "wrap",
+            }}
+          >
+            <button
+              type="button"
+              onClick={handleAutoSso}
+              style={{
+                padding: "6px 12px",
+                background: "#15803d",
+                border: "none",
+                borderRadius: 6,
+                color: "#fff",
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              🎯 Auto-Click Microsoft SSO Button
+            </button>
+
+            <form
+              onSubmit={handleSendQuickText}
+              style={{ display: "flex", gap: 6, flex: 1, minWidth: 260 }}
+            >
+              <input
+                type="text"
+                placeholder="Type or paste text (email, password) to insert..."
+                value={quickText}
+                onChange={(e) => setQuickText(e.target.value)}
+                style={{
+                  flex: 1,
+                  padding: "6px 12px",
+                  background: "#020617",
+                  border: "1px solid #334155",
+                  borderRadius: 6,
+                  color: "#e2e8f0",
+                  fontSize: 12,
+                  outline: "none",
+                }}
+              />
+              <button
+                type="submit"
+                style={{
+                  padding: "6px 12px",
+                  background: "#2563eb",
+                  border: "none",
+                  borderRadius: 6,
+                  color: "#fff",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                Type into Field ↵
+              </button>
+            </form>
+
+            <button
+              type="button"
+              onClick={() => handleSendKey("Enter")}
+              style={{
+                padding: "6px 10px",
+                background: "#334155",
+                border: "none",
+                borderRadius: 6,
+                color: "#e2e8f0",
+                fontSize: 12,
+                cursor: "pointer",
+              }}
+            >
+              Send Enter ↵
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleSendKey("Tab")}
+              style={{
+                padding: "6px 10px",
+                background: "#334155",
+                border: "none",
+                borderRadius: 6,
+                color: "#e2e8f0",
+                fontSize: 12,
+                cursor: "pointer",
+              }}
+            >
+              Send Tab ⇥
+            </button>
+          </div>
         </div>
       )}
 
-      {/* INTERACTIVE SCREENCAST CANVAS */}
-      {sessionActive && sessionMode === "screencast" && (
+      {/* INTERACTIVE LIVE STREAM SCREEN */}
+      {sessionActive && (
         <div
+          ref={screenContainerRef}
+          onClick={handleScreenClick}
           style={{
             position: "relative",
             width: "100%",
@@ -460,8 +607,11 @@ export default function Home() {
             borderRadius: 12,
             overflow: "hidden",
             boxShadow: "0 20px 50px rgba(0,0,0,0.8)",
+            cursor: "crosshair",
+            userSelect: "none",
           }}
         >
+          {/* Browser Address Bar Display */}
           <div
             style={{
               background: "#0f172a",
@@ -475,28 +625,26 @@ export default function Home() {
             }}
           >
             <span>🔒 https://login.mypurecloud.com/#/authenticate-adv/org/hellofresh</span>
-            <span style={{ color: "#38bdf8" }}>Click canvas to focus & type credentials</span>
+            <span style={{ color: "#38bdf8" }}>Click anywhere on the screen below to interact</span>
           </div>
 
-          <canvas
-            ref={canvasRef}
-            tabIndex={0}
-            onClick={handleCanvasClick}
-            onKeyDown={handleCanvasKeyDown}
-            onWheel={handleCanvasWheel}
-            style={{
-              display: "block",
-              width: "100%",
-              height: "auto",
-              cursor: "pointer",
-              outline: "none",
-            }}
-          />
-
-          {!frameSrc && (
+          {/* Live Screencast Frame */}
+          {frameSrc ? (
+            <img
+              src={frameSrc}
+              alt="Live Browser Session"
+              draggable={false}
+              style={{
+                display: "block",
+                width: "100%",
+                height: "auto",
+                pointerEvents: "none", // Clicks pass cleanly to the parent container
+              }}
+            />
+          ) : (
             <div
               style={{
-                padding: "80px 20px",
+                padding: "120px 20px",
                 textAlign: "center",
                 color: "#64748b",
                 fontSize: 14,
@@ -505,8 +653,34 @@ export default function Home() {
               ⏳ Connecting to browser session and streaming frames...
             </div>
           )}
+
+          {/* Click Ripple Indicator */}
+          {clickIndicator && (
+            <div
+              key={clickIndicator.id}
+              style={{
+                position: "absolute",
+                left: clickIndicator.x - 12,
+                top: clickIndicator.y - 12,
+                width: 24,
+                height: 24,
+                borderRadius: "50%",
+                background: "rgba(59, 130, 246, 0.4)",
+                border: "2px solid #60a5fa",
+                pointerEvents: "none",
+                animation: "pulse 0.4s ease-out",
+              }}
+            />
+          )}
         </div>
       )}
+
+      <style>{`
+        @keyframes pulse {
+          0% { transform: scale(0.5); opacity: 1; }
+          100% { transform: scale(2.2); opacity: 0; }
+        }
+      `}</style>
     </main>
   );
 }

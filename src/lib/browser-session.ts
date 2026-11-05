@@ -41,20 +41,23 @@ export interface ActiveSession {
 
 import { resolveBrowserExecutable } from "./detect-browser";
 
-let currentSession: ActiveSession | null = null;
+declare global {
+  // eslint-disable-next-line no-var
+  var __genesys_browser_session: ActiveSession | null | undefined;
+}
 
 export async function startInteractiveSession(
   mode: "screencast" | "native" = "screencast",
   onEvent?: (event: StreamEvent) => void
 ): Promise<ActiveSession> {
   // If an existing session is running, close it first
-  if (currentSession && !currentSession.isClosed) {
+  if (globalThis.__genesys_browser_session && !globalThis.__genesys_browser_session.isClosed) {
     try {
-      await currentSession.close();
+      await globalThis.__genesys_browser_session.close();
     } catch {
       // ignore
     }
-    currentSession = null;
+    globalThis.__genesys_browser_session = null;
   }
 
   const { executablePath, browserName, isCloud, args: resolvedArgs, env: resolvedEnv } =
@@ -110,13 +113,13 @@ export async function startInteractiveSession(
       } catch {
         // ignore
       }
-      if (currentSession === this) {
-        currentSession = null;
+      if (globalThis.__genesys_browser_session === this) {
+        globalThis.__genesys_browser_session = null;
       }
     },
   };
 
-  currentSession = session;
+  globalThis.__genesys_browser_session = session;
 
   function onTokenFound(token: string, source: string) {
     if (capturedToken || session.isClosed) return;
@@ -204,8 +207,8 @@ export async function startInteractiveSession(
   browser.on("disconnected", () => {
     clearInterval(storageInterval);
     session.isClosed = true;
-    if (currentSession === session) {
-      currentSession = null;
+    if (globalThis.__genesys_browser_session === session) {
+      globalThis.__genesys_browser_session = null;
     }
   });
 
@@ -249,5 +252,7 @@ export async function startInteractiveSession(
 }
 
 export function getCurrentSession(): ActiveSession | null {
-  return currentSession && !currentSession.isClosed ? currentSession : null;
+  return globalThis.__genesys_browser_session && !globalThis.__genesys_browser_session.isClosed
+    ? globalThis.__genesys_browser_session
+    : null;
 }
