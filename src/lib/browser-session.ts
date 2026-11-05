@@ -469,6 +469,53 @@ export async function startInteractiveSession(
               type: "status",
               data: "Returned to Genesys Cloud — capturing Bearer access token...",
             });
+
+            // 1. Inspect cookies for auth tokens
+            try {
+              const cookies = await page.cookies();
+              for (const c of cookies) {
+                if (/inin.*auth.*token|access_token|auth_token|inin-session/i.test(c.name) && c.value.length > 25) {
+                  if (!c.value.startsWith("{") && !c.value.includes("%7B")) {
+                    onTokenFound(c.value, `cookie:${c.name}`);
+                    break;
+                  }
+                }
+              }
+            } catch {
+              // ignore
+            }
+
+            // 2. Click Collaborate / Communicate card if on portal landing page
+            if (!capturedToken) {
+              const clickedApp = await page.evaluate(() => {
+                const elements = Array.from(document.querySelectorAll("a, button, div, span, [role='button']")) as HTMLElement[];
+                const card = elements.find((el) => {
+                  const text = (el.textContent || "").trim();
+                  return /collaborate\s*\/?\s*communicate/i.test(text);
+                });
+                if (card) {
+                  const clickable = card.closest("a, button, [role='button']") as HTMLElement || card;
+                  clickable.click();
+                  return true;
+                }
+                return false;
+              });
+
+              if (clickedApp) {
+                session.onEvent?.({
+                  type: "status",
+                  data: "Launching Collaborate app to extract OAuth Bearer token...",
+                });
+                await new Promise((r) => setTimeout(r, 2500));
+              } else if (pageState.url.includes("login.mypurecloud.com")) {
+                session.onEvent?.({
+                  type: "status",
+                  data: "Navigating to Collaborate app to retrieve OAuth token...",
+                });
+                await page.goto("https://apps.mypurecloud.com/", { waitUntil: "domcontentloaded", timeout: 15_000 }).catch(() => {});
+                await new Promise((r) => setTimeout(r, 2000));
+              }
+            }
           }
         } catch {
           // page may be navigating

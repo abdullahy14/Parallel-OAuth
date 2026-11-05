@@ -100,7 +100,7 @@ export async function POST(req: NextRequest) {
   }
 
   let body: {
-    type?: "click" | "key" | "typeText" | "pressKey" | "auto-sso" | "submitPassword";
+    type?: "click" | "key" | "typeText" | "pressKey" | "auto-sso" | "submitPassword" | "launchApp";
     x?: number;
     y?: number;
     key?: string;
@@ -229,6 +229,24 @@ export async function POST(req: NextRequest) {
       });
 
       return NextResponse.json({ success: true, action: "auto-sso", clicked });
+    }
+
+    // ── 6. LAUNCH COLLABORATE / COMMUNICATE APP ────────────────────────────────
+    if (body.type === "launchApp") {
+      const clicked = await page.evaluate(() => {
+        const elements = Array.from(document.querySelectorAll("a, button, div, [role='button']")) as HTMLElement[];
+        const card = elements.find((el) => /collaborate\s*\/?\s*communicate/i.test(el.textContent || ""));
+        if (card) {
+          const clickable = card.closest("a, button, [role='button']") as HTMLElement || card;
+          clickable.click();
+          return true;
+        }
+        return false;
+      });
+      if (!clicked) {
+        await page.goto("https://apps.mypurecloud.com/", { waitUntil: "domcontentloaded" }).catch(() => {});
+      }
+      return NextResponse.json({ success: true, action: "launchApp", clicked });
     }
 
     return NextResponse.json({ error: "Unsupported action." }, { status: 400 });

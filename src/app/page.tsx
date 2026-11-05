@@ -268,6 +268,25 @@ export default function Home() {
     }
   }
 
+  async function handleLaunchApp() {
+    try {
+      setActionStatus("Launching Collaborate / Communicate app...");
+      const res = await fetch("/api/stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "launchApp" }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setActionStatus("✓ Launching Collaborate app...");
+      } else {
+        setActionStatus(`Notice: ${data.error ?? "Failed to launch app"}`);
+      }
+    } catch {
+      setActionStatus("Network error launching app");
+    }
+  }
+
   async function handleCopyToken() {
     if (!tokenData) return;
     await navigator.clipboard.writeText(tokenData.token);
@@ -641,6 +660,23 @@ export default function Home() {
               }}
             >
               🎯 Auto-Click Microsoft SSO Button
+            </button>
+
+            <button
+              type="button"
+              onClick={handleLaunchApp}
+              style={{
+                padding: "6px 12px",
+                background: "#0891b2",
+                border: "none",
+                borderRadius: 6,
+                color: "#fff",
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              🚀 Enter Collaborate App
             </button>
 
             <form
