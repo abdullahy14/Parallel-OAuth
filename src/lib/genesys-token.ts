@@ -106,29 +106,21 @@ export async function launchBrowser(): Promise<Browser> {
     });
   }
 
-  // Local development — use system-installed Chrome.
+  // Local development — detect Island, Edge, or Chrome.
   const puppeteer = (await import("puppeteer-core")).default;
-  const { existsSync } = await import("fs");
+  const { detectLocalBrowser } = await import("./detect-browser");
 
-  const localExecutables = [
-    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    "/usr/bin/google-chrome",
-    "/usr/bin/chromium-browser",
-    "/usr/bin/chromium",
-    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
-    process.env.CHROME_EXECUTABLE_PATH ?? "",
-  ].filter(Boolean);
-
-  const executablePath = localExecutables.find((p) => existsSync(p));
-  if (!executablePath) {
-    throw new Error(
-      "No local Chrome executable found. Install Google Chrome or set CHROME_EXECUTABLE_PATH."
-    );
-  }
+  const { path: executablePath } = detectLocalBrowser();
 
   return puppeteer.launch({
-    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-gpu",
+      "--disable-blink-features=AutomationControlled",
+    ],
+    ignoreDefaultArgs: ["--enable-automation"],
     executablePath,
     headless: true,
   });

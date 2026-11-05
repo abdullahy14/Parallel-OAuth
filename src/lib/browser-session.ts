@@ -39,27 +39,9 @@ export interface ActiveSession {
   close: () => Promise<void>;
 }
 
+import { detectLocalBrowser } from "./detect-browser";
+
 let currentSession: ActiveSession | null = null;
-
-function getLocalChromeExecutable(): string {
-  const localExecutables = [
-    process.env.CHROME_EXECUTABLE_PATH ?? "",
-    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
-    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    "/usr/bin/google-chrome",
-    "/usr/bin/chromium-browser",
-    "/usr/bin/chromium",
-  ].filter(Boolean);
-
-  const found = localExecutables.find((p) => existsSync(p));
-  if (!found) {
-    throw new Error(
-      "Chrome executable not found. Install Google Chrome or set CHROME_EXECUTABLE_PATH."
-    );
-  }
-  return found;
-}
 
 export async function startInteractiveSession(
   mode: "screencast" | "native" = "screencast",
@@ -75,10 +57,15 @@ export async function startInteractiveSession(
     currentSession = null;
   }
 
-  const executablePath = getLocalChromeExecutable();
+  const { path: executablePath, name: browserName } = detectLocalBrowser();
   const width = 1080;
   const height = 720;
   const isHeadless = mode === "screencast";
+
+  onEvent?.({
+    type: "status",
+    data: `Launching ${browserName} browser (${mode === "screencast" ? "embedded stream" : "native window"})...`,
+  });
 
   const browser = await puppeteer.launch({
     executablePath,
@@ -91,7 +78,12 @@ export async function startInteractiveSession(
       "--disable-dev-shm-usage",
       "--disable-gpu",
       "--no-default-browser-check",
+      "--no-first-run",
+      "--disable-blink-features=AutomationControlled",
+      "--disable-features=Translate,OptimizationHints,MediaRouter",
+      "--remote-debugging-port=0",
     ],
+    ignoreDefaultArgs: ["--enable-automation"],
   });
 
   const page = await browser.newPage();
