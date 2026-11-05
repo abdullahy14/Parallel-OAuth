@@ -39,7 +39,7 @@ export interface ActiveSession {
   close: () => Promise<void>;
 }
 
-import { detectLocalBrowser } from "./detect-browser";
+import { resolveBrowserExecutable } from "./detect-browser";
 
 let currentSession: ActiveSession | null = null;
 
@@ -57,32 +57,31 @@ export async function startInteractiveSession(
     currentSession = null;
   }
 
-  const { path: executablePath, name: browserName } = detectLocalBrowser();
+  const { executablePath, browserName, isCloud, args: resolvedArgs } =
+    await resolveBrowserExecutable();
+
   const width = 1080;
   const height = 720;
-  const isHeadless = mode === "screencast";
+  // Cloud (Vercel/Lambda) does not have a display, so it must always run headless
+  const isHeadless = isCloud || mode === "screencast";
 
   onEvent?.({
     type: "status",
-    data: `Launching ${browserName} browser (${mode === "screencast" ? "embedded stream" : "native window"})...`,
+    data: isCloud
+      ? "Initializing cloud browser session on Vercel..."
+      : `Launching ${browserName} (${mode === "screencast" ? "embedded stream" : "native window"})...`,
   });
+
+  const launchArgs = [
+    ...resolvedArgs,
+    `--window-size=${width},${height}`,
+  ];
 
   const browser = await puppeteer.launch({
     executablePath,
     headless: isHeadless,
     defaultViewport: { width, height },
-    args: [
-      `--window-size=${width},${height}`,
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
-      "--disable-gpu",
-      "--no-default-browser-check",
-      "--no-first-run",
-      "--disable-blink-features=AutomationControlled",
-      "--disable-features=Translate,OptimizationHints,MediaRouter",
-      "--remote-debugging-port=0",
-    ],
+    args: launchArgs,
     ignoreDefaultArgs: ["--enable-automation"],
   });
 

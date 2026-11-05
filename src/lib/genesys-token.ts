@@ -78,48 +78,13 @@ export function isAllowedRedirectUrl(url: string): boolean {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function launchBrowser(): Promise<Browser> {
-  const isVercel =
-    process.env.VERCEL === "1" || process.env.AWS_LAMBDA_FUNCTION_NAME != null;
-
-  if (isVercel) {
-    const chromium = (await import("@sparticuz/chromium-min")).default;
-    const puppeteer = (await import("puppeteer-core")).default;
-    const executablePath = await chromium.executablePath(CHROMIUM_REMOTE_URL);
-
-    return puppeteer.launch({
-      args: [
-        ...chromium.args,
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--single-process",
-        "--no-zygote",
-        "--disable-background-networking",
-        "--disable-extensions",
-        "--disable-sync",
-        "--mute-audio",
-      ],
-      defaultViewport: chromium.defaultViewport,
-      executablePath,
-      headless: chromium.headless,
-    });
-  }
-
-  // Local development — detect Island, Edge, or Chrome.
   const puppeteer = (await import("puppeteer-core")).default;
-  const { detectLocalBrowser } = await import("./detect-browser");
+  const { resolveBrowserExecutable } = await import("./detect-browser");
 
-  const { path: executablePath } = detectLocalBrowser();
+  const { executablePath, args } = await resolveBrowserExecutable();
 
   return puppeteer.launch({
-    args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
-      "--disable-gpu",
-      "--disable-blink-features=AutomationControlled",
-    ],
+    args,
     ignoreDefaultArgs: ["--enable-automation"],
     executablePath,
     headless: true,

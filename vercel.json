@@ -7,6 +7,14 @@
     "src/app/api/login/route.ts": {
       "memory": 2048,
       "maxDuration": 60
+    },
+    "src/app/api/stream/route.ts": {
+      "memory": 2048,
+      "maxDuration": 60
+    },
+    "src/app/api/stream/action/route.ts": {
+      "memory": 1024,
+      "maxDuration": 15
     }
   },
   "headers": [

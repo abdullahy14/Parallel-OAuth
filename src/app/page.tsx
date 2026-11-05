@@ -394,7 +394,7 @@ export default function Home() {
               boxShadow: "0 4px 14px rgba(37, 99, 235, 0.4)",
             }}
           >
-            📺 Open Live Stream Session (In Page)
+            📺 Open Live Stream Session (Edge / Island / Chrome / Cloud)
           </button>
 
           <button
@@ -410,7 +410,7 @@ export default function Home() {
               cursor: "pointer",
             }}
           >
-            🪟 Open Native Chrome Window
+            🪟 Open Native Desktop Window (Edge / Island / Chrome)
           </button>
         </div>
       )}
