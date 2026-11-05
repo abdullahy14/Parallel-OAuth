@@ -1,12 +1,12 @@
 /**
- * /api/stream — Live browser session screencast (SSE)
+ * /api/stream — Live browser session screencast (SSE) & Direct Input Actions
  *
- * Opens a local browser session and streams live video frames to the frontend
- * so the user can see and interact with Microsoft SSO directly.
+ * Handling both GET (SSE Stream) and POST (Actions) in the same file ensures
+ * they are bundled into the same Lambda function on Vercel.
  */
 
-import { NextRequest } from "next/server";
-import { startInteractiveSession, StreamEvent } from "@/lib/browser-session";
+import { NextRequest, NextResponse } from "next/server";
+import { startInteractiveSession, getCurrentSession, StreamEvent } from "@/lib/browser-session";
 
 export const dynamic = "force-dynamic";
 
@@ -72,4 +72,151 @@ export async function GET(req: NextRequest) {
       Connection: "keep-alive",
     },
   });
+}
+
+export async function POST(req: NextRequest) {
+  const session = getCurrentSession();
+  if (!session) {
+    return NextResponse.json(
+      { error: "No active browser session found on this instance." },
+      { status: 404 }
+    );
+  }
+
+  let body: {
+    type?: "click" | "key" | "typeText" | "pressKey" | "auto-sso" | "submitPassword";
+    x?: number;
+    y?: number;
+    key?: string;
+    text?: string;
+    password?: string;
+  } = {};
+
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
+  const { page, client } = session;
+
+  try {
+    // ── 1. SUBMIT PASSWORD DIRECTLY ──────────────────────────────────────────
+    if (body.type === "submitPassword" && body.password) {
+      const passSelector = 'input[type="password"], input[name="passwd"], #i0118, #passwordInput';
+      const passEl = await page.$(passSelector);
+      if (passEl) {
+        await passEl.focus();
+        await new Promise((r) => setTimeout(r, 200));
+
+        // Clear existing value
+        await page.evaluate((sel) => {
+          const el = document.querySelector(sel) as HTMLInputElement;
+          if (el) el.value = "";
+        }, passSelector);
+
+        await passEl.type(body.password, { delay: 40 });
+        await new Promise((r) => setTimeout(r, 400));
+
+        const submitBtn = await page.$(
+          'input[type="submit"], button[type="submit"], #idSIButton9, input[value="Sign in"]'
+        );
+        if (submitBtn) {
+          await submitBtn.click();
+        } else {
+          await page.keyboard.press("Enter");
+        }
+
+        return NextResponse.json({ success: true, action: "submitPassword" });
+      } else {
+        // Fallback to active focused element
+        await page.keyboard.type(body.password, { delay: 40 });
+        await page.keyboard.press("Enter");
+        return NextResponse.json({ success: true, action: "submitPassword-fallback" });
+      }
+    }
+
+    // ── 2. TYPE TEXT INTO ACTIVE/TARGET FIELD ─────────────────────────────────
+    if (body.type === "typeText" && typeof body.text === "string") {
+      const passSelector = 'input[type="password"], input[name="passwd"], #i0118, #passwordInput, input:focus';
+      const targetEl = await page.$(passSelector);
+      if (targetEl) {
+        await targetEl.focus();
+        await new Promise((r) => setTimeout(r, 200));
+        await targetEl.type(body.text, { delay: 30 });
+      } else {
+        await page.keyboard.type(body.text, { delay: 30 });
+      }
+      return NextResponse.json({ success: true, action: "typeText" });
+    }
+
+    // ── 3. SINGLE KEY PRESS (Enter, Tab) ──────────────────────────────────────
+    if (body.type === "pressKey" && body.key) {
+      if (body.key === "Enter") {
+        const submitBtn = await page.$(
+          'input[type="submit"], button[type="submit"], #idSIButton9, input[value="Sign in"]'
+        );
+        if (submitBtn) {
+          await submitBtn.click();
+        } else {
+          await page.keyboard.press("Enter");
+        }
+      } else {
+        await page.keyboard.press(body.key as any);
+      }
+      return NextResponse.json({ success: true, action: "pressKey", key: body.key });
+    }
+
+    // ── 4. MOUSE CLICK ────────────────────────────────────────────────────────
+    if (body.type === "click" && typeof body.x === "number" && typeof body.y === "number") {
+      const x = Math.round(body.x);
+      const y = Math.round(body.y);
+
+      try {
+        await page.mouse.click(x, y, { delay: 60 });
+      } catch {
+        await client.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+        await client.send("Input.dispatchMouseEvent", {
+          type: "mousePressed",
+          x,
+          y,
+          button: "left",
+          buttons: 1,
+          clickCount: 1,
+        });
+        await new Promise((r) => setTimeout(r, 60));
+        await client.send("Input.dispatchMouseEvent", {
+          type: "mouseReleased",
+          x,
+          y,
+          button: "left",
+          buttons: 0,
+        });
+      }
+      return NextResponse.json({ success: true, action: "click", x, y });
+    }
+
+    // ── 5. AUTO SSO BUTTON CLICK ──────────────────────────────────────────────
+    if (body.type === "auto-sso") {
+      const clicked = await page.evaluate(() => {
+        const buttons = Array.from(document.querySelectorAll("button, a")) as HTMLElement[];
+        const sso = buttons.find(
+          (el) =>
+            /microsoft|single sign|sso|azure|entra/i.test(el.textContent ?? "") ||
+            /microsoft|sso|adv/i.test(el.className)
+        );
+        if (sso) {
+          sso.click();
+          return true;
+        }
+        return false;
+      });
+
+      return NextResponse.json({ success: true, action: "auto-sso", clicked });
+    }
+
+    return NextResponse.json({ error: "Unsupported action." }, { status: 400 });
+  } catch (err) {
+    return NextResponse.json({ error: (err as Error).message }, { status: 500 });
+  }
 }

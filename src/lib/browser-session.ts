@@ -281,15 +281,32 @@ export async function startInteractiveSession(
       // Step B: Enter email if provided
       if (email && !capturedToken) {
         try {
-          await page.waitForSelector('input[name="loginfmt"]', { timeout: 15_000 });
+          const emailSelector = 'input[name="loginfmt"], #i0116';
+          await page.waitForSelector(emailSelector, { visible: true, timeout: 20_000 });
           session.onEvent?.({
             type: "status",
             data: `Entering email: ${email}...`,
           });
-          await page.type('input[name="loginfmt"]', email, { delay: 40 });
-          const nextBtn = await page.$('input[type="submit"], button[type="submit"], #idSIButton9');
-          await nextBtn?.click();
-          await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15_000 }).catch(() => {});
+          const emailInput = await page.$(emailSelector);
+          if (emailInput) {
+            await emailInput.focus();
+            await page.evaluate((sel) => {
+              const el = document.querySelector(sel) as HTMLInputElement;
+              if (el) {
+                el.value = "";
+                el.dispatchEvent(new Event("input", { bubbles: true }));
+                el.dispatchEvent(new Event("change", { bubbles: true }));
+              }
+            }, emailSelector);
+            await emailInput.type(email, { delay: 40 });
+            await new Promise((r) => setTimeout(r, 400));
+            const nextBtn = await page.$('input[type="submit"], button[type="submit"], #idSIButton9');
+            if (nextBtn) {
+              await nextBtn.click();
+            } else {
+              await page.keyboard.press("Enter");
+            }
+          }
         } catch (e) {
           console.warn("[session] Email step notice:", (e as Error).message);
         }
@@ -298,35 +315,166 @@ export async function startInteractiveSession(
       // Step C: Enter password if provided
       if (password && !capturedToken) {
         try {
-          await page.waitForSelector('input[name="passwd"]', { timeout: 15_000 });
           session.onEvent?.({
             type: "status",
-            data: "Entering password...",
+            data: "Waiting for password field to appear...",
           });
-          await page.type('input[name="passwd"]', password, { delay: 40 });
-          const submitBtn = await page.$('input[type="submit"], button[type="submit"], #idSIButton9');
-          await submitBtn?.click();
-          session.onEvent?.({
-            type: "status",
-            data: "Submitting credentials — approve 2FA on your phone if prompted...",
-          });
-          await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 20_000 }).catch(() => {});
+
+          const passSelector = 'input[type="password"], input[name="passwd"], #i0118, #passwordInput';
+
+          // 1. Wait until password input is mounted, visible, and has positive layout dimensions
+          await page.waitForFunction((sel) => {
+            const el = document.querySelector(sel) as HTMLElement | null;
+            if (!el) return false;
+            const style = window.getComputedStyle(el);
+            const rect = el.getBoundingClientRect();
+            return (
+              style.display !== "none" &&
+              style.visibility !== "hidden" &&
+              style.opacity !== "0" &&
+              rect.width > 0 &&
+              rect.height > 0
+            );
+          }, { timeout: 25_000 }, passSelector);
+
+          // 2. Wait for Microsoft slide transition (.slide-in-next) and Knockout.js model bindings to settle
+          await new Promise((r) => setTimeout(r, 1200));
+
+          const passEl = await page.$(passSelector);
+          if (passEl) {
+            session.onEvent?.({
+              type: "status",
+              data: "Entering password...",
+            });
+
+            await passEl.focus();
+            await passEl.click();
+            await new Promise((r) => setTimeout(r, 300));
+
+            // Clear any autofill or existing content
+            await page.evaluate((sel) => {
+              const el = document.querySelector(sel) as HTMLInputElement;
+              if (el) {
+                el.value = "";
+                el.dispatchEvent(new Event("input", { bubbles: true }));
+                el.dispatchEvent(new Event("change", { bubbles: true }));
+              }
+            }, passSelector);
+            await new Promise((r) => setTimeout(r, 200));
+
+            // Type with realistic delay
+            await passEl.type(password, { delay: 50 });
+            await new Promise((r) => setTimeout(r, 300));
+
+            // Force Knockout observable / React state to accept the value and events
+            await page.evaluate((sel, pwd) => {
+              const el = document.querySelector(sel) as HTMLInputElement;
+              if (el) {
+                if (!el.value || el.value.length === 0) {
+                  el.value = pwd;
+                }
+                el.dispatchEvent(new Event("input", { bubbles: true }));
+                el.dispatchEvent(new Event("change", { bubbles: true }));
+                el.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true }));
+              }
+            }, passSelector, password);
+
+            await new Promise((r) => setTimeout(r, 400));
+
+            // Click Sign in or press Enter
+            const submitBtn = await page.$(
+              'input[type="submit"], button[type="submit"], #idSIButton9, input[value="Sign in"]'
+            );
+            if (submitBtn) {
+              await submitBtn.click();
+            } else {
+              await page.keyboard.press("Enter");
+            }
+
+            session.onEvent?.({
+              type: "status",
+              data: "Credentials submitted — checking verification / 2FA...",
+            });
+
+            // 3. Retry guard: Check after 1.8 seconds if "Please enter your password" appears
+            await new Promise((r) => setTimeout(r, 1800));
+            const hasError = await page.evaluate(() => {
+              const text = document.body.innerText || "";
+              return /please enter your password/i.test(text);
+            });
+
+            if (hasError && !capturedToken) {
+              session.onEvent?.({
+                type: "status",
+                data: "Retrying password submission...",
+              });
+              await page.evaluate((sel, pwd) => {
+                const el = document.querySelector(sel) as HTMLInputElement;
+                if (el) {
+                  el.focus();
+                  el.value = pwd;
+                  el.dispatchEvent(new Event("input", { bubbles: true }));
+                  el.dispatchEvent(new Event("change", { bubbles: true }));
+                }
+                const btn = document.querySelector('input[type="submit"], button[type="submit"], #idSIButton9') as HTMLElement;
+                if (btn) btn.click();
+              }, passSelector, password);
+            }
+          }
         } catch (e) {
           console.warn("[session] Password step notice:", (e as Error).message);
         }
       }
 
-      // Step D: Handle "Stay signed in?" prompt
-      if (!capturedToken) {
+      // Step D: Watch for 2FA, KMSI (Stay signed in), or redirect back to Genesys
+      const postAuthStartTime = Date.now();
+      while (!capturedToken && !session.isClosed && (Date.now() - postAuthStartTime < 55_000)) {
         try {
-          const yesBtn = await page.$("#idSIButton9");
-          if (yesBtn) {
-            await yesBtn.click();
-            await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15_000 }).catch(() => {});
+          const pageState = await page.evaluate(() => {
+            const text = document.body.innerText || "";
+            const url = window.location.href;
+
+            const isKmsi = /stay signed in/i.test(text) || /kmsi/i.test(url);
+            const signEl = document.querySelector(
+              "#idRichContext_DisplaySign, .display-sign-in-number, [data-test-id='number-matching']"
+            );
+            const numberMatch = signEl?.textContent?.trim() || null;
+            const isPush2fa = /approve a request|check your|open your authenticator/i.test(text);
+
+            return { isKmsi, numberMatch, isPush2fa, url };
+          });
+
+          if (pageState.isKmsi) {
+            session.onEvent?.({
+              type: "status",
+              data: "Accepting 'Stay signed in'...",
+            });
+            const yesBtn = await page.$('#idSIButton9, input[value="Yes"]');
+            if (yesBtn) {
+              await yesBtn.click();
+              await new Promise((r) => setTimeout(r, 2000));
+            }
+          } else if (pageState.numberMatch) {
+            session.onEvent?.({
+              type: "status",
+              data: `Approve 2FA on phone: Enter number "${pageState.numberMatch}" in Authenticator app!`,
+            });
+          } else if (pageState.isPush2fa) {
+            session.onEvent?.({
+              type: "status",
+              data: "Approve the sign-in notification on your Microsoft Authenticator app...",
+            });
+          } else if (pageState.url.includes("purecloud.com")) {
+            session.onEvent?.({
+              type: "status",
+              data: "Returned to Genesys Cloud — capturing Bearer access token...",
+            });
           }
         } catch {
-          // ignore
+          // page may be navigating
         }
+
+        await new Promise((r) => setTimeout(r, 1500));
       }
 
       if (!capturedToken) {

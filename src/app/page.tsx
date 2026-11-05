@@ -144,7 +144,7 @@ export default function Home() {
 
     try {
       setActionStatus(`Clicking at (${x}, ${y})...`);
-      const res = await fetch("/api/stream/action", {
+      const res = await fetch("/api/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ type: "click", x, y }),
@@ -155,7 +155,7 @@ export default function Home() {
       } else {
         setActionStatus(`Notice: ${data.error ?? "Click error"}`);
       }
-    } catch (err) {
+    } catch {
       setActionStatus("Network error sending click");
     }
   }
@@ -166,7 +166,7 @@ export default function Home() {
 
     try {
       setActionStatus(`Typing text into active field...`);
-      const res = await fetch("/api/stream/action", {
+      const res = await fetch("/api/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ type: "typeText", text: quickText }),
@@ -181,10 +181,36 @@ export default function Home() {
     }
   }
 
+  async function handleDirectSubmitPassword(pwd?: string) {
+    const targetPassword = pwd || authPassword || quickText;
+    if (!targetPassword) {
+      setActionStatus("Please enter password above or in the input box first.");
+      return;
+    }
+
+    try {
+      setActionStatus("Submitting password into browser session...");
+      const res = await fetch("/api/stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "submitPassword", password: targetPassword }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setActionStatus("✓ Password entered & submitted!");
+        setQuickText("");
+      } else {
+        setActionStatus(`Notice: ${data.error ?? "Password submit error"}`);
+      }
+    } catch {
+      setActionStatus("Failed to submit password");
+    }
+  }
+
   async function handleSendKey(key: string) {
     try {
       setActionStatus(`Pressing ${key}...`);
-      await fetch("/api/stream/action", {
+      await fetch("/api/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ type: "pressKey", key }),
@@ -198,7 +224,7 @@ export default function Home() {
   async function handleAutoSso() {
     try {
       setActionStatus("Looking for Microsoft / SSO button on page...");
-      const res = await fetch("/api/stream/action", {
+      const res = await fetch("/api/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ type: "auto-sso" }),
@@ -629,6 +655,24 @@ export default function Home() {
                 Type into Field ↵
               </button>
             </form>
+
+            <button
+              type="button"
+              onClick={() => handleDirectSubmitPassword()}
+              style={{
+                padding: "6px 12px",
+                background: "#7c3aed",
+                border: "none",
+                borderRadius: 6,
+                color: "#fff",
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: "pointer",
+                whiteSpace: "nowrap",
+              }}
+            >
+              🔑 Submit Password
+            </button>
 
             <button
               type="button"
