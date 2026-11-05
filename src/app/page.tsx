@@ -16,25 +16,41 @@ interface ClickFeedback {
   id: number;
 }
 
+interface LogEntry {
+  id: number;
+  time: string;
+  text: string;
+  type: "info" | "success" | "warn" | "error" | "2fa";
+}
+
 export default function Home() {
+  const [activeTab, setActiveTab] = useState<"api" | "visual">("api");
   const [sessionActive, setSessionActive] = useState(false);
-  const [statusMsg, setStatusMsg] = useState("Ready to launch cloud authentication session.");
+  const [statusMsg, setStatusMsg] = useState("Ready to authenticate.");
   const [frameSrc, setFrameSrc] = useState<string | null>(null);
   const [tokenData, setTokenData] = useState<TokenPayload | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [copiedJson, setCopiedJson] = useState(false);
   const [showJson, setShowJson] = useState(false);
-  const [showToken, setShowToken] = useState(true);
   const [timeLeft, setTimeLeft] = useState<number | null>(null);
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [quickText, setQuickText] = useState("");
   const [clickIndicator, setClickIndicator] = useState<ClickFeedback | null>(null);
   const [actionStatus, setActionStatus] = useState<string | null>(null);
+  const [logs, setLogs] = useState<LogEntry[]>([
+    {
+      id: 1,
+      time: new Date().toLocaleTimeString(),
+      text: "API Dashboard initialized. Enter HelloFresh credentials and click 'Launch Authentication'.",
+      type: "info",
+    },
+  ]);
 
   const screenContainerRef = useRef<HTMLDivElement | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const logTerminalRef = useRef<HTMLDivElement | null>(null);
 
   // Restore token from localStorage or backend cache on page load
   useEffect(() => {
@@ -44,6 +60,7 @@ export default function Home() {
         const parsed = JSON.parse(saved);
         if (parsed && parsed.expiresAt > Date.now()) {
           setTokenData(parsed);
+          addLog("Restored active 12-hour token from browser storage.", "success");
           return;
         }
       }
@@ -57,6 +74,7 @@ export default function Home() {
           try {
             localStorage.setItem("genesys_captured_token", JSON.stringify(data));
           } catch {}
+          addLog("Retrieved active cached token from backend server.", "success");
         }
       })
       .catch(() => {});
@@ -71,6 +89,13 @@ export default function Home() {
     return () => clearInterval(timer);
   }, [tokenData]);
 
+  // Autoscroll log terminal
+  useEffect(() => {
+    if (logTerminalRef.current) {
+      logTerminalRef.current.scrollTop = logTerminalRef.current.scrollHeight;
+    }
+  }, [logs]);
+
   // Clean up SSE when unmounting
   useEffect(() => {
     return () => {
@@ -80,23 +105,39 @@ export default function Home() {
     };
   }, []);
 
-  function startSession(emailOverride?: string, passwordOverride?: string) {
+  function addLog(text: string, type: "info" | "success" | "warn" | "error" | "2fa" = "info") {
+    setLogs((prev) => [
+      ...prev,
+      {
+        id: Date.now() + Math.random(),
+        time: new Date().toLocaleTimeString(),
+        text,
+        type,
+      },
+    ]);
+  }
+
+  function startSession(tabMode?: "api" | "visual") {
+    const mode = (tabMode ?? activeTab) === "visual" ? "screencast" : "headless";
     setSessionActive(true);
     setErrorMsg(null);
     setFrameSrc(null);
     setActionStatus(null);
-    setStatusMsg("Booting cloud browser session on Vercel...");
+
+    const initialMsg =
+      mode === "headless"
+        ? "Launching headless cloud session (zero video overhead)..."
+        : "Launching live visual screencast...";
+    setStatusMsg(initialMsg);
+    addLog(initialMsg, "info");
 
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
     }
 
-    const emailParam = emailOverride ?? authEmail;
-    const passwordParam = passwordOverride ?? authPassword;
-
-    let url = "/api/stream?mode=screencast";
-    if (emailParam) url += `&email=${encodeURIComponent(emailParam)}`;
-    if (passwordParam) url += `&password=${encodeURIComponent(passwordParam)}`;
+    let url = `/api/stream?mode=${mode}`;
+    if (authEmail) url += `&email=${encodeURIComponent(authEmail)}`;
+    if (authPassword) url += `&password=${encodeURIComponent(authPassword)}`;
 
     const es = new EventSource(url);
     eventSourceRef.current = es;
@@ -109,15 +150,21 @@ export default function Home() {
           setFrameSrc(`data:image/jpeg;base64,${event.data}`);
         } else if (event.type === "status") {
           setStatusMsg(event.data);
+
+          let logType: "info" | "2fa" | "warn" = "info";
+          if (/2fa|authenticator|number/i.test(event.data)) logType = "2fa";
+          else if (/retry|wait/i.test(event.data)) logType = "warn";
+
+          addLog(event.data, logType);
         } else if (event.type === "token" && event.tokenPayload) {
           setTokenData(event.tokenPayload);
           try {
             localStorage.setItem("genesys_captured_token", JSON.stringify(event.tokenPayload));
           } catch {}
           setSessionActive(false);
+          addLog("✓ Bearer Token successfully captured and cached for 12 hours!", "success");
           es.close();
 
-          // Broadcast to parent window if opened as popup
           if (typeof window !== "undefined" && window.opener) {
             window.opener.postMessage(
               {
@@ -128,7 +175,9 @@ export default function Home() {
             );
           }
         } else if (event.type === "error") {
-          setErrorMsg(event.error ?? "Session failed.");
+          const err = event.error ?? "Session failed.";
+          setErrorMsg(err);
+          addLog(`Error: ${err}`, "error");
           setSessionActive(false);
           es.close();
         }
@@ -147,12 +196,14 @@ export default function Home() {
               localStorage.setItem("genesys_captured_token", JSON.stringify(data));
             } catch {}
             setSessionActive(false);
+            addLog("✓ Active Bearer token verified and synced!", "success");
           } else if (!tokenData) {
-            setStatusMsg("Session ended. Re-launch if authentication was not finished.");
+            setStatusMsg("Session closed.");
+            addLog("Stream connection closed.", "warn");
           }
         })
         .catch(() => {
-          if (!tokenData) setStatusMsg("Session ended.");
+          if (!tokenData) setStatusMsg("Session closed.");
         });
       es.close();
     };
@@ -164,7 +215,8 @@ export default function Home() {
       eventSourceRef.current = null;
     }
     setSessionActive(false);
-    setStatusMsg("Session stopped.");
+    setStatusMsg("Session stopped by user.");
+    addLog("Session stopped by user.", "warn");
   }
 
   async function handleScreenClick(e: React.MouseEvent<HTMLDivElement>) {
@@ -175,11 +227,9 @@ export default function Home() {
     const percentX = (e.clientX - rect.left) / rect.width;
     const percentY = (e.clientY - rect.top) / rect.height;
 
-    // Fixed browser resolution configured in backend
     const x = Math.round(percentX * 1080);
     const y = Math.round(percentY * 720);
 
-    // Show visual click ripple indicator
     setClickIndicator({ x: e.clientX - rect.left, y: e.clientY - rect.top, id: Date.now() });
     setTimeout(() => setClickIndicator(null), 600);
 
@@ -214,7 +264,7 @@ export default function Home() {
       });
       const data = await res.json();
       if (data.success) {
-        setActionStatus(`Typed "${quickText.length > 10 ? quickText.slice(0, 10) + '...' : quickText}"`);
+        setActionStatus(`Typed text`);
         setQuickText("");
       }
     } catch {
@@ -225,7 +275,7 @@ export default function Home() {
   async function handleDirectSubmitPassword(pwd?: string) {
     const targetPassword = pwd || authPassword || quickText;
     if (!targetPassword) {
-      setActionStatus("Please enter password above or in the input box first.");
+      setActionStatus("Please enter password above first.");
       return;
     }
 
@@ -264,7 +314,7 @@ export default function Home() {
 
   async function handleAutoSso() {
     try {
-      setActionStatus("Looking for Microsoft / SSO button on page...");
+      setActionStatus("Looking for Microsoft SSO button...");
       const res = await fetch("/api/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -272,9 +322,9 @@ export default function Home() {
       });
       const data = await res.json();
       if (data.clicked) {
-        setActionStatus("✓ Clicked Microsoft SSO button successfully!");
+        setActionStatus("✓ Clicked Microsoft SSO button!");
       } else {
-        setActionStatus("SSO button not found yet (page might still be loading)");
+        setActionStatus("SSO button not found yet");
       }
     } catch {
       setActionStatus("Failed to trigger Auto SSO");
@@ -283,7 +333,7 @@ export default function Home() {
 
   async function handleLaunchApp() {
     try {
-      setActionStatus("Launching Collaborate / Communicate app...");
+      setActionStatus("Entering Collaborate / Communicate app...");
       const res = await fetch("/api/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -331,54 +381,122 @@ export default function Home() {
         flexDirection: "column",
         alignItems: "center",
         justifyContent: "flex-start",
-        padding: "30px 20px",
+        padding: "30px 20px 60px 20px",
         fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
         color: "#e2e8f0",
+        background: "#030712",
       }}
     >
       {/* Header */}
-      <div style={{ textAlign: "center", marginBottom: 24 }}>
-        <h1 style={{ fontSize: 24, fontWeight: 700, margin: "0 0 6px 0", color: "#60a5fa" }}>
-          Genesys Cloud Live Authentication Portal
-        </h1>
-        <p style={{ margin: 0, fontSize: 14, color: "#94a3b8" }}>
-          Cloud session stream with interactive clicks and automatic 12-hour OAuth token capture
+      <div style={{ textAlign: "center", marginBottom: 20 }}>
+        <div style={{ display: "inline-flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+          <span style={{ fontSize: 24 }}>🔑</span>
+          <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0, color: "#60a5fa" }}>
+            Genesys Cloud OAuth API Dashboard
+          </h1>
+        </div>
+        <p style={{ margin: 0, fontSize: 13, color: "#94a3b8" }}>
+          Headless automation engine for HelloFresh Microsoft SSO with 12-hour Bearer token extraction
         </p>
       </div>
 
-      {/* SUCCESS STATE */}
+      {/* Mode Switcher Tabs */}
+      <div
+        style={{
+          display: "flex",
+          background: "#0f172a",
+          padding: 4,
+          borderRadius: 10,
+          border: "1px solid #1e293b",
+          marginBottom: 24,
+          gap: 6,
+        }}
+      >
+        <button
+          onClick={() => {
+            if (sessionActive && activeTab !== "api") stopSession();
+            setActiveTab("api");
+          }}
+          style={{
+            padding: "8px 18px",
+            background: activeTab === "api" ? "#2563eb" : "transparent",
+            color: activeTab === "api" ? "#fff" : "#94a3b8",
+            border: "none",
+            borderRadius: 8,
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+          }}
+        >
+          <span>⚡</span> Headless API Dashboard (Live Logs)
+        </button>
+
+        <button
+          onClick={() => {
+            if (sessionActive && activeTab !== "visual") stopSession();
+            setActiveTab("visual");
+          }}
+          style={{
+            padding: "8px 18px",
+            background: activeTab === "visual" ? "#2563eb" : "transparent",
+            color: activeTab === "visual" ? "#fff" : "#94a3b8",
+            border: "none",
+            borderRadius: 8,
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+          }}
+        >
+          <span>🖥️</span> Live Visual Screencast
+        </button>
+      </div>
+
+      {/* SUCCESS TOKEN STATE (Always pinned at top if available) */}
       {tokenData && (
         <div
           style={{
             width: "100%",
-            maxWidth: 640,
-            background: "#0f172a",
+            maxWidth: 780,
+            background: "#080c18",
             border: "1px solid #16a34a",
-            borderRadius: 16,
-            padding: 24,
+            borderRadius: 14,
+            padding: 22,
             marginBottom: 24,
-            boxShadow: "0 10px 30px rgba(0,0,0,0.5)",
+            boxShadow: "0 10px 30px rgba(0,0,0,0.6)",
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
-            <span style={{ fontSize: 24 }}>✅</span>
-            <h2 style={{ fontSize: 18, margin: 0, color: "#4ade80" }}>
-              Authentication Successful — Token Captured!
-            </h2>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontSize: 22 }}>✅</span>
+              <h2 style={{ fontSize: 17, margin: 0, color: "#4ade80", fontWeight: 700 }}>
+                Genesys Cloud Token Ready (12-Hour Validity)
+              </h2>
+            </div>
+            <span
+              style={{
+                fontSize: 12,
+                color: "#facc15",
+                background: "#1c1917",
+                border: "1px solid #78350f",
+                padding: "3px 10px",
+                borderRadius: 12,
+                fontWeight: 600,
+              }}
+            >
+              Expires in: {timeLeft !== null ? formatCountdown(Math.max(0, timeLeft)) : "12 hours"}
+            </span>
           </div>
 
-          <div
-            style={{
-              background: "#080c18",
-              border: "1px solid #16a34a",
-              borderRadius: 10,
-              padding: 14,
-              marginBottom: 16,
-            }}
-          >
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-              <span style={{ fontSize: 13, fontWeight: 600, color: "#86efac" }}>🔑 Full Bearer Access Token:</span>
-              <span style={{ fontSize: 11, color: "#94a3b8" }}>Click inside to select all</span>
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, fontSize: 12 }}>
+              <span style={{ color: "#86efac", fontWeight: 600 }}>Bearer Access Token (Click to select all):</span>
+              <span style={{ color: "#64748b" }}>Source: {tokenData.source}</span>
             </div>
             <textarea
               readOnly
@@ -386,12 +504,12 @@ export default function Home() {
               onClick={(e) => (e.target as HTMLTextAreaElement).select()}
               style={{
                 width: "100%",
-                height: 110,
+                height: 100,
                 fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
                 fontSize: 12,
                 color: "#67e8f9",
-                background: "#030712",
-                border: "1px solid #334155",
+                background: "#020617",
+                border: "1px solid #1e293b",
                 borderRadius: 8,
                 padding: 10,
                 resize: "vertical",
@@ -402,14 +520,7 @@ export default function Home() {
             />
           </div>
 
-          <div style={{ fontSize: 13, color: "#94a3b8", marginBottom: 16 }}>
-            ⏱️ Active for <strong>12 hours</strong> · Expires in:{" "}
-            <span style={{ color: "#facc15", fontWeight: "bold" }}>
-              {timeLeft !== null ? formatCountdown(Math.max(0, timeLeft)) : "..."}
-            </span>
-          </div>
-
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
             <button
               onClick={handleCopyToken}
               style={{
@@ -421,9 +532,13 @@ export default function Home() {
                 color: "#fff",
                 fontWeight: 600,
                 cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 8,
               }}
             >
-              {copied ? "✓ Copied Token!" : "Copy Bearer Token"}
+              {copied ? "✓ Copied Token!" : "📋 Copy Bearer Token"}
             </button>
 
             <button
@@ -437,9 +552,13 @@ export default function Home() {
                 color: "#fff",
                 fontWeight: 600,
                 cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 8,
               }}
             >
-              {copiedJson ? "✓ Copied JSON!" : "📋 Copy Full JSON"}
+              {copiedJson ? "✓ Copied JSON!" : "📋 Copy JSON Payload"}
             </button>
           </div>
 
@@ -450,18 +569,18 @@ export default function Home() {
               border: "none",
               color: "#94a3b8",
               cursor: "pointer",
-              fontSize: 12,
+              fontSize: 11,
               padding: 0,
               textDecoration: "underline",
             }}
           >
-            {showJson ? "▲ Hide raw JSON payload" : "▼ Inspect raw JSON payload"}
+            {showJson ? "▲ Hide raw JSON details" : "▼ Inspect raw JSON details"}
           </button>
 
           {showJson && (
             <pre
               style={{
-                background: "#05070e",
+                background: "#020617",
                 border: "1px solid #1e293b",
                 borderRadius: 8,
                 padding: 12,
@@ -477,16 +596,16 @@ export default function Home() {
         </div>
       )}
 
-      {/* ERROR STATE */}
+      {/* ERROR BANNER */}
       {errorMsg && (
         <div
           style={{
-            maxWidth: 640,
+            maxWidth: 780,
             width: "100%",
             background: "#450a0a",
             border: "1px solid #ef4444",
-            borderRadius: 12,
-            padding: 14,
+            borderRadius: 10,
+            padding: 12,
             marginBottom: 20,
             fontSize: 13,
             color: "#fca5a5",
@@ -496,371 +615,598 @@ export default function Home() {
         </div>
       )}
 
-      {/* PRIMARY LAUNCH CARD (When session is idle) */}
-      {!sessionActive && (
-        <div
-          style={{
-            width: "100%",
-            maxWidth: 480,
-            background: "#0f172a",
-            border: "1px solid #1e293b",
-            borderRadius: 16,
-            padding: 28,
-            boxShadow: "0 10px 30px rgba(0,0,0,0.5)",
-            marginBottom: 20,
-          }}
-        >
-          <div style={{ marginBottom: 16 }}>
-            <label style={{ display: "block", fontSize: 13, color: "#94a3b8", marginBottom: 6 }}>
-              Work Email (Optional for auto-fill):
-            </label>
-            <input
-              type="email"
-              placeholder="e.g. name@hellofresh.com"
-              value={authEmail}
-              onChange={(e) => setAuthEmail(e.target.value)}
-              style={{
-                width: "100%",
-                padding: "10px 14px",
-                background: "#020617",
-                border: "1px solid #334155",
-                borderRadius: 8,
-                color: "#e2e8f0",
-                fontSize: 14,
-                outline: "none",
-                boxSizing: "border-box",
-              }}
-            />
-          </div>
-
-          <div style={{ marginBottom: 20 }}>
-            <label style={{ display: "block", fontSize: 13, color: "#94a3b8", marginBottom: 6 }}>
-              Password (Optional for auto-fill):
-            </label>
-            <input
-              type="password"
-              placeholder="••••••••••••"
-              value={authPassword}
-              onChange={(e) => setAuthPassword(e.target.value)}
-              style={{
-                width: "100%",
-                padding: "10px 14px",
-                background: "#020617",
-                border: "1px solid #334155",
-                borderRadius: 8,
-                color: "#e2e8f0",
-                fontSize: 14,
-                outline: "none",
-                boxSizing: "border-box",
-              }}
-            />
-          </div>
-
-          <button
-            onClick={() => startSession()}
-            style={{
-              width: "100%",
-              padding: "14px 24px",
-              background: "linear-gradient(135deg, #2563eb, #1d4ed8)",
-              border: "none",
-              borderRadius: 10,
-              color: "#fff",
-              fontSize: 15,
-              fontWeight: 700,
-              cursor: "pointer",
-              boxShadow: "0 4px 14px rgba(37, 99, 235, 0.4)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 10,
-            }}
-          >
-            <span>☁️</span> Launch Cloud Authentication Session
-          </button>
-
-          <p style={{ margin: "14px 0 0 0", fontSize: 12, color: "#64748b", textAlign: "center", lineHeight: 1.5 }}>
-            Automates the Microsoft SSO entry and streams the live browser session.
-            Approve on your Authenticator app if prompted.
-          </p>
-        </div>
-      )}
-
-      {/* ACTIVE SESSION BAR & ASSISTIVE INPUT TOOLBAR */}
-      {sessionActive && (
-        <div style={{ width: "100%", maxWidth: 1080, marginBottom: 12 }}>
-          {/* Top Status & End Bar */}
+      {/* ───────────────────────────────────────────────────────────────────────────── */}
+      {/* TAB 1: HEADLESS API DASHBOARD (LIVE LOGS, NO FRAMES)                           */}
+      {/* ───────────────────────────────────────────────────────────────────────────── */}
+      {activeTab === "api" && (
+        <div style={{ width: "100%", maxWidth: 780, display: "flex", flexDirection: "column", gap: 18 }}>
+          {/* Credentials Card */}
           <div
             style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              background: "#1e293b",
-              borderRadius: "10px 10px 0 0",
-              padding: "10px 16px",
-              borderBottom: "1px solid #334155",
+              background: "#0f172a",
+              border: "1px solid #1e293b",
+              borderRadius: 14,
+              padding: 22,
+              boxShadow: "0 4px 20px rgba(0,0,0,0.4)",
             }}
           >
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <span
-                style={{
-                  width: 10,
-                  height: 10,
-                  borderRadius: "50%",
-                  background: "#22c55e",
-                  display: "inline-block",
-                  boxShadow: "0 0 8px #22c55e",
-                }}
-              />
-              <span style={{ fontSize: 13, color: "#cbd5e1" }}>{statusMsg}</span>
-              {actionStatus && (
-                <span
+            <h3 style={{ margin: "0 0 14px 0", fontSize: 15, color: "#e2e8f0", fontWeight: 600 }}>
+              HelloFresh SSO Credentials
+            </h3>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 18 }}>
+              <div>
+                <label style={{ display: "block", fontSize: 12, color: "#94a3b8", marginBottom: 6 }}>
+                  Work Email:
+                </label>
+                <input
+                  type="email"
+                  placeholder="e.g. name@cc.hellofresh.com"
+                  value={authEmail}
+                  onChange={(e) => setAuthEmail(e.target.value)}
+                  disabled={sessionActive}
                   style={{
-                    fontSize: 11,
-                    background: "#0f172a",
-                    border: "1px solid #38bdf8",
-                    color: "#38bdf8",
-                    padding: "2px 8px",
-                    borderRadius: 12,
+                    width: "100%",
+                    padding: "10px 12px",
+                    background: "#020617",
+                    border: "1px solid #334155",
+                    borderRadius: 8,
+                    color: "#e2e8f0",
+                    fontSize: 13,
+                    outline: "none",
+                    boxSizing: "border-box",
                   }}
-                >
-                  {actionStatus}
-                </span>
-              )}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: "block", fontSize: 12, color: "#94a3b8", marginBottom: 6 }}>
+                  Password:
+                </label>
+                <input
+                  type="password"
+                  placeholder="••••••••••••"
+                  value={authPassword}
+                  onChange={(e) => setAuthPassword(e.target.value)}
+                  disabled={sessionActive}
+                  style={{
+                    width: "100%",
+                    padding: "10px 12px",
+                    background: "#020617",
+                    border: "1px solid #334155",
+                    borderRadius: 8,
+                    color: "#e2e8f0",
+                    fontSize: 13,
+                    outline: "none",
+                    boxSizing: "border-box",
+                  }}
+                />
+              </div>
             </div>
 
-            <button
-              onClick={stopSession}
-              style={{
-                padding: "6px 14px",
-                background: "#ef4444",
-                border: "none",
-                borderRadius: 6,
-                color: "#fff",
-                fontSize: 12,
-                fontWeight: 600,
-                cursor: "pointer",
-              }}
-            >
-              End Session
-            </button>
-          </div>
-
-          {/* Assistant Action Toolbar (Quick Type / Enter / Auto-SSO) */}
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              background: "#0f172a",
-              padding: "8px 14px",
-              border: "1px solid #334155",
-              borderTop: "none",
-              flexWrap: "wrap",
-            }}
-          >
-            <button
-              type="button"
-              onClick={handleAutoSso}
-              style={{
-                padding: "6px 12px",
-                background: "#15803d",
-                border: "none",
-                borderRadius: 6,
-                color: "#fff",
-                fontSize: 12,
-                fontWeight: 600,
-                cursor: "pointer",
-              }}
-            >
-              🎯 Auto-Click Microsoft SSO Button
-            </button>
-
-            <button
-              type="button"
-              onClick={handleLaunchApp}
-              style={{
-                padding: "6px 12px",
-                background: "#0891b2",
-                border: "none",
-                borderRadius: 6,
-                color: "#fff",
-                fontSize: 12,
-                fontWeight: 600,
-                cursor: "pointer",
-              }}
-            >
-              🚀 Enter Collaborate App
-            </button>
-
-            <form
-              onSubmit={handleSendQuickText}
-              style={{ display: "flex", gap: 6, flex: 1, minWidth: 260 }}
-            >
-              <input
-                type="text"
-                placeholder="Type or paste text (email, password) to insert..."
-                value={quickText}
-                onChange={(e) => setQuickText(e.target.value)}
+            <div style={{ display: "flex", gap: 10 }}>
+              <button
+                onClick={() => startSession("api")}
+                disabled={sessionActive}
                 style={{
                   flex: 1,
-                  padding: "6px 12px",
-                  background: "#020617",
-                  border: "1px solid #334155",
-                  borderRadius: 6,
-                  color: "#e2e8f0",
-                  fontSize: 12,
-                  outline: "none",
-                }}
-              />
-              <button
-                type="submit"
-                style={{
-                  padding: "6px 12px",
-                  background: "#2563eb",
+                  padding: "12px 20px",
+                  background: sessionActive
+                    ? "#334155"
+                    : "linear-gradient(135deg, #2563eb, #1d4ed8)",
                   border: "none",
-                  borderRadius: 6,
+                  borderRadius: 8,
                   color: "#fff",
-                  fontSize: 12,
+                  fontSize: 14,
                   fontWeight: 600,
-                  cursor: "pointer",
-                  whiteSpace: "nowrap",
+                  cursor: sessionActive ? "not-allowed" : "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 8,
                 }}
               >
-                Type into Field ↵
+                {sessionActive ? (
+                  <>
+                    <span
+                      style={{
+                        display: "inline-block",
+                        width: 14,
+                        height: 14,
+                        border: "2px solid #fff",
+                        borderTopColor: "transparent",
+                        borderRadius: "50%",
+                        animation: "spin 0.8s linear infinite",
+                      }}
+                    />
+                    <span>Executing Headless Authentication...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>🚀</span>
+                    <span>Launch Headless Authentication</span>
+                  </>
+                )}
               </button>
-            </form>
 
-            <button
-              type="button"
-              onClick={() => handleDirectSubmitPassword()}
+              {sessionActive && (
+                <button
+                  onClick={stopSession}
+                  style={{
+                    padding: "12px 20px",
+                    background: "#ef4444",
+                    border: "none",
+                    borderRadius: 8,
+                    color: "#fff",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                >
+                  Stop
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Live Execution Log Terminal */}
+          <div
+            style={{
+              background: "#020617",
+              border: "1px solid #1e293b",
+              borderRadius: 14,
+              overflow: "hidden",
+              boxShadow: "0 10px 30px rgba(0,0,0,0.5)",
+            }}
+          >
+            {/* Terminal Header */}
+            <div
               style={{
-                padding: "6px 12px",
-                background: "#7c3aed",
-                border: "none",
-                borderRadius: 6,
-                color: "#fff",
-                fontSize: 12,
-                fontWeight: 600,
-                cursor: "pointer",
-                whiteSpace: "nowrap",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "10px 16px",
+                background: "#0f172a",
+                borderBottom: "1px solid #1e293b",
               }}
             >
-              🔑 Submit Password
-            </button>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span
+                  style={{
+                    width: 10,
+                    height: 10,
+                    borderRadius: "50%",
+                    background: sessionActive ? "#22c55e" : "#64748b",
+                    boxShadow: sessionActive ? "0 0 8px #22c55e" : "none",
+                  }}
+                />
+                <span style={{ fontSize: 12, fontWeight: 600, color: "#94a3b8", textTransform: "uppercase" }}>
+                  Execution Logs & Telemetry
+                </span>
+              </div>
 
-            <button
-              type="button"
-              onClick={() => handleSendKey("Enter")}
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <span style={{ fontSize: 11, color: "#64748b" }}>
+                  {sessionActive ? "Stream Active" : "Idle"}
+                </span>
+                <button
+                  onClick={() => setLogs([])}
+                  style={{
+                    background: "transparent",
+                    border: "1px solid #334155",
+                    borderRadius: 4,
+                    color: "#94a3b8",
+                    fontSize: 11,
+                    padding: "2px 8px",
+                    cursor: "pointer",
+                  }}
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+
+            {/* Terminal Body */}
+            <div
+              ref={logTerminalRef}
               style={{
-                padding: "6px 10px",
-                background: "#334155",
-                border: "none",
-                borderRadius: 6,
-                color: "#e2e8f0",
+                padding: "14px 16px",
+                minHeight: 220,
+                maxHeight: 320,
+                overflowY: "auto",
+                fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
                 fontSize: 12,
-                cursor: "pointer",
+                lineHeight: 1.6,
               }}
             >
-              Send Enter ↵
-            </button>
+              {logs.map((log) => {
+                let badgeColor = "#64748b";
+                let badgeText = "INFO";
+                let textColor = "#cbd5e1";
 
-            <button
-              type="button"
-              onClick={() => handleSendKey("Tab")}
+                if (log.type === "success") {
+                  badgeColor = "#16a34a";
+                  badgeText = "SUCCESS";
+                  textColor = "#86efac";
+                } else if (log.type === "2fa") {
+                  badgeColor = "#eab308";
+                  badgeText = "2FA-REQ";
+                  textColor = "#fef08a";
+                } else if (log.type === "warn") {
+                  badgeColor = "#f97316";
+                  badgeText = "WARN";
+                  textColor = "#fed7aa";
+                } else if (log.type === "error") {
+                  badgeColor = "#ef4444";
+                  badgeText = "ERROR";
+                  textColor = "#fca5a5";
+                }
+
+                return (
+                  <div key={log.id} style={{ display: "flex", gap: 10, marginBottom: 4 }}>
+                    <span style={{ color: "#475569", flexShrink: 0 }}>[{log.time}]</span>
+                    <span
+                      style={{
+                        background: `${badgeColor}22`,
+                        color: badgeColor,
+                        padding: "0 6px",
+                        borderRadius: 4,
+                        fontSize: 10,
+                        fontWeight: 700,
+                        height: 18,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        flexShrink: 0,
+                      }}
+                    >
+                      {badgeText}
+                    </span>
+                    <span style={{ color: textColor, wordBreak: "break-word" }}>{log.text}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Programmatic API Quick Reference */}
+          <div
+            style={{
+              background: "#080c18",
+              border: "1px solid #1e293b",
+              borderRadius: 12,
+              padding: 16,
+            }}
+          >
+            <h4 style={{ margin: "0 0 8px 0", fontSize: 13, color: "#38bdf8" }}>
+              🌐 Direct Programmatic Access (No Frontend Needed)
+            </h4>
+            <p style={{ margin: "0 0 10px 0", fontSize: 12, color: "#94a3b8" }}>
+              Agents or scripts can directly call the API endpoint via POST to receive the token as pure JSON:
+            </p>
+            <pre
               style={{
-                padding: "6px 10px",
-                background: "#334155",
-                border: "none",
-                borderRadius: 6,
-                color: "#e2e8f0",
-                fontSize: 12,
-                cursor: "pointer",
+                background: "#020617",
+                border: "1px solid #1e293b",
+                borderRadius: 8,
+                padding: 10,
+                fontSize: 11,
+                color: "#a5f3fc",
+                overflowX: "auto",
+                margin: 0,
               }}
             >
-              Send Tab ⇥
-            </button>
+{`curl -X POST "https://parallel-auth.vercel.app/api/login" \\
+  -H "Content-Type: application/json" \\
+  -d '{"email":"yourname@cc.hellofresh.com", "password":"yourPassword"}'`}
+            </pre>
           </div>
         </div>
       )}
 
-      {/* INTERACTIVE LIVE STREAM SCREEN */}
-      {sessionActive && (
-        <div
-          ref={screenContainerRef}
-          onClick={handleScreenClick}
-          style={{
-            position: "relative",
-            width: "100%",
-            maxWidth: 1080,
-            background: "#020617",
-            border: "2px solid #3b82f6",
-            borderRadius: 12,
-            overflow: "hidden",
-            boxShadow: "0 20px 50px rgba(0,0,0,0.8)",
-            cursor: "crosshair",
-            userSelect: "none",
-          }}
-        >
-          {/* Browser Address Bar Display */}
-          <div
-            style={{
-              background: "#0f172a",
-              padding: "8px 14px",
-              borderBottom: "1px solid #1e293b",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              fontSize: 12,
-              color: "#64748b",
-            }}
-          >
-            <span>🔒 https://login.mypurecloud.com/#/authenticate-adv/org/hellofresh</span>
-            <span style={{ color: "#38bdf8" }}>Click anywhere on the screen below to interact</span>
-          </div>
-
-          {/* Live Screencast Frame */}
-          {frameSrc ? (
-            <img
-              src={frameSrc}
-              alt="Live Browser Session"
-              draggable={false}
-              style={{
-                display: "block",
-                width: "100%",
-                height: "auto",
-                pointerEvents: "none", // Clicks pass cleanly to the parent container
-              }}
-            />
-          ) : (
+      {/* ───────────────────────────────────────────────────────────────────────────── */}
+      {/* TAB 2: LIVE VISUAL SCREENCAST (INTERACTIVE CANVAS STREAM)                     */}
+      {/* ───────────────────────────────────────────────────────────────────────────── */}
+      {activeTab === "visual" && (
+        <div style={{ width: "100%", maxWidth: 1080, display: "flex", flexDirection: "column", alignItems: "center" }}>
+          {!sessionActive && (
             <div
               style={{
-                padding: "120px 20px",
-                textAlign: "center",
-                color: "#64748b",
-                fontSize: 14,
+                width: "100%",
+                maxWidth: 480,
+                background: "#0f172a",
+                border: "1px solid #1e293b",
+                borderRadius: 14,
+                padding: 24,
+                marginBottom: 20,
               }}
             >
-              ⏳ Connecting to browser session and streaming frames...
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ display: "block", fontSize: 12, color: "#94a3b8", marginBottom: 6 }}>
+                  Work Email:
+                </label>
+                <input
+                  type="email"
+                  placeholder="e.g. name@cc.hellofresh.com"
+                  value={authEmail}
+                  onChange={(e) => setAuthEmail(e.target.value)}
+                  style={{
+                    width: "100%",
+                    padding: "10px 12px",
+                    background: "#020617",
+                    border: "1px solid #334155",
+                    borderRadius: 8,
+                    color: "#e2e8f0",
+                    fontSize: 13,
+                    outline: "none",
+                    boxSizing: "border-box",
+                  }}
+                />
+              </div>
+
+              <div style={{ marginBottom: 18 }}>
+                <label style={{ display: "block", fontSize: 12, color: "#94a3b8", marginBottom: 6 }}>
+                  Password:
+                </label>
+                <input
+                  type="password"
+                  placeholder="••••••••••••"
+                  value={authPassword}
+                  onChange={(e) => setAuthPassword(e.target.value)}
+                  style={{
+                    width: "100%",
+                    padding: "10px 12px",
+                    background: "#020617",
+                    border: "1px solid #334155",
+                    borderRadius: 8,
+                    color: "#e2e8f0",
+                    fontSize: 13,
+                    outline: "none",
+                    boxSizing: "border-box",
+                  }}
+                />
+              </div>
+
+              <button
+                onClick={() => startSession("visual")}
+                style={{
+                  width: "100%",
+                  padding: "12px 20px",
+                  background: "linear-gradient(135deg, #2563eb, #1d4ed8)",
+                  border: "none",
+                  borderRadius: 8,
+                  color: "#fff",
+                  fontSize: 14,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                Launch Visual Screencast Session
+              </button>
             </div>
           )}
 
-          {/* Click Ripple Indicator */}
-          {clickIndicator && (
-            <div
-              key={clickIndicator.id}
-              style={{
-                position: "absolute",
-                left: clickIndicator.x - 12,
-                top: clickIndicator.y - 12,
-                width: 24,
-                height: 24,
-                borderRadius: "50%",
-                background: "rgba(59, 130, 246, 0.4)",
-                border: "2px solid #60a5fa",
-                pointerEvents: "none",
-                animation: "pulse 0.4s ease-out",
-              }}
-            />
+          {sessionActive && (
+            <div style={{ width: "100%", marginBottom: 12 }}>
+              {/* Top Bar */}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  background: "#1e293b",
+                  borderRadius: "10px 10px 0 0",
+                  padding: "10px 16px",
+                  borderBottom: "1px solid #334155",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <span
+                    style={{
+                      width: 10,
+                      height: 10,
+                      borderRadius: "50%",
+                      background: "#22c55e",
+                      boxShadow: "0 0 8px #22c55e",
+                    }}
+                  />
+                  <span style={{ fontSize: 13, color: "#cbd5e1" }}>{statusMsg}</span>
+                  {actionStatus && (
+                    <span
+                      style={{
+                        fontSize: 11,
+                        background: "#0f172a",
+                        border: "1px solid #38bdf8",
+                        color: "#38bdf8",
+                        padding: "2px 8px",
+                        borderRadius: 12,
+                      }}
+                    >
+                      {actionStatus}
+                    </span>
+                  )}
+                </div>
+
+                <button
+                  onClick={stopSession}
+                  style={{
+                    padding: "6px 14px",
+                    background: "#ef4444",
+                    border: "none",
+                    borderRadius: 6,
+                    color: "#fff",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                >
+                  End Session
+                </button>
+              </div>
+
+              {/* Assistive Toolbar */}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  background: "#0f172a",
+                  padding: "8px 14px",
+                  border: "1px solid #334155",
+                  borderTop: "none",
+                  flexWrap: "wrap",
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={handleAutoSso}
+                  style={{
+                    padding: "6px 12px",
+                    background: "#15803d",
+                    border: "none",
+                    borderRadius: 6,
+                    color: "#fff",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                >
+                  🎯 Auto-Click Microsoft SSO Button
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleLaunchApp}
+                  style={{
+                    padding: "6px 12px",
+                    background: "#0891b2",
+                    border: "none",
+                    borderRadius: 6,
+                    color: "#fff",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                >
+                  🚀 Enter Collaborate App
+                </button>
+
+                <form
+                  onSubmit={handleSendQuickText}
+                  style={{ display: "flex", gap: 6, flex: 1, minWidth: 240 }}
+                >
+                  <input
+                    type="text"
+                    placeholder="Type or paste text..."
+                    value={quickText}
+                    onChange={(e) => setQuickText(e.target.value)}
+                    style={{
+                      flex: 1,
+                      padding: "6px 12px",
+                      background: "#020617",
+                      border: "1px solid #334155",
+                      borderRadius: 6,
+                      color: "#e2e8f0",
+                      fontSize: 12,
+                      outline: "none",
+                    }}
+                  />
+                  <button
+                    type="submit"
+                    style={{
+                      padding: "6px 12px",
+                      background: "#2563eb",
+                      border: "none",
+                      borderRadius: 6,
+                      color: "#fff",
+                      fontSize: 12,
+                      fontWeight: 600,
+                      cursor: "pointer",
+                    }}
+                  >
+                    Type ↵
+                  </button>
+                </form>
+
+                <button
+                  type="button"
+                  onClick={() => handleDirectSubmitPassword()}
+                  style={{
+                    padding: "6px 12px",
+                    background: "#7c3aed",
+                    border: "none",
+                    borderRadius: 6,
+                    color: "#fff",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                >
+                  🔑 Submit Password
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleSendKey("Enter")}
+                  style={{
+                    padding: "6px 10px",
+                    background: "#334155",
+                    border: "none",
+                    borderRadius: 6,
+                    color: "#e2e8f0",
+                    fontSize: 12,
+                    cursor: "pointer",
+                  }}
+                >
+                  Enter ↵
+                </button>
+              </div>
+
+              {/* Screencast Screen */}
+              <div
+                ref={screenContainerRef}
+                onClick={handleScreenClick}
+                style={{
+                  position: "relative",
+                  width: "100%",
+                  background: "#020617",
+                  border: "2px solid #3b82f6",
+                  borderRadius: "0 0 12px 12px",
+                  overflow: "hidden",
+                  cursor: "crosshair",
+                  userSelect: "none",
+                }}
+              >
+                {frameSrc ? (
+                  <img
+                    src={frameSrc}
+                    alt="Live Browser Session"
+                    draggable={false}
+                    style={{ display: "block", width: "100%", height: "auto", pointerEvents: "none" }}
+                  />
+                ) : (
+                  <div style={{ padding: "120px 20px", textAlign: "center", color: "#64748b", fontSize: 14 }}>
+                    ⏳ Connecting to live session screencast...
+                  </div>
+                )}
+
+                {clickIndicator && (
+                  <div
+                    key={clickIndicator.id}
+                    style={{
+                      position: "absolute",
+                      left: clickIndicator.x - 12,
+                      top: clickIndicator.y - 12,
+                      width: 24,
+                      height: 24,
+                      borderRadius: "50%",
+                      background: "rgba(59, 130, 246, 0.4)",
+                      border: "2px solid #60a5fa",
+                      pointerEvents: "none",
+                      animation: "pulse 0.4s ease-out",
+                    }}
+                  />
+                )}
+              </div>
+            </div>
           )}
         </div>
       )}
@@ -869,6 +1215,10 @@ export default function Home() {
         @keyframes pulse {
           0% { transform: scale(0.5); opacity: 1; }
           100% { transform: scale(2.2); opacity: 0; }
+        }
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
         }
       `}</style>
     </main>

@@ -27,7 +27,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "No cached token found" }, { status: 404 });
   }
 
-  const mode = (req.nextUrl.searchParams.get("mode") as "screencast" | "native") || "screencast";
+  const mode = (req.nextUrl.searchParams.get("mode") as "screencast" | "native" | "headless") || "headless";
   const email = req.nextUrl.searchParams.get("email") || undefined;
   const password = req.nextUrl.searchParams.get("password") || undefined;
 

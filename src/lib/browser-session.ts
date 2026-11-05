@@ -12,19 +12,14 @@ import {
   STRICT_LOGIN_URL,
   TOKEN_TTL_MS,
   setCachedToken,
+  type TokenResult,
 } from "./genesys-token";
 import { resolveBrowserExecutable } from "./detect-browser";
 
 export interface StreamEvent {
   type: "frame" | "token" | "error" | "status";
   data?: string;
-  tokenPayload?: {
-    success: true;
-    token: string;
-    source: string;
-    expiresAt: number;
-    cachedUntil: string;
-  };
+  tokenPayload?: TokenResult;
   error?: string;
 }
 
@@ -45,7 +40,7 @@ declare global {
 }
 
 export async function startInteractiveSession(
-  mode: "screencast" | "native" = "screencast",
+  mode: "screencast" | "native" | "headless" = "headless",
   credentials?: { email?: string; password?: string },
   onEvent?: (event: StreamEvent) => void
 ): Promise<ActiveSession> {
@@ -119,7 +114,7 @@ export async function startInteractiveSession(
 
   globalThis.__genesys_browser_session = session;
 
-  function onTokenFound(token: string, source: string) {
+  function onTokenFound(token: string, source: TokenResult["source"]) {
     if (capturedToken || session.isClosed) return;
     capturedToken = token;
     tokenSource = source;
@@ -250,29 +245,31 @@ export async function startInteractiveSession(
     }
   });
 
-  // Start Screencast
-  await client.send("Page.startScreencast", {
-    format: "jpeg",
-    quality: 75,
-    maxWidth: width,
-    maxHeight: height,
-    everyNthFrame: 1,
-  });
+  // Start Screencast only if visual mode is requested
+  if (mode === "screencast") {
+    await client.send("Page.startScreencast", {
+      format: "jpeg",
+      quality: 75,
+      maxWidth: width,
+      maxHeight: height,
+      everyNthFrame: 1,
+    });
 
-  client.on("Page.screencastFrame", async ({ data, sessionId }) => {
-    try {
-      await client.send("Page.screencastFrameAck", { sessionId });
-    } catch {
-      // ignore
-    }
+    client.on("Page.screencastFrame", async ({ data, sessionId }) => {
+      try {
+        await client.send("Page.screencastFrameAck", { sessionId });
+      } catch {
+        // ignore
+      }
 
-    if (!session.isClosed) {
-      session.onEvent?.({
-        type: "frame",
-        data,
-      });
-    }
-  });
+      if (!session.isClosed) {
+        session.onEvent?.({
+          type: "frame",
+          data,
+        });
+      }
+    });
+  }
 
   // ── Automated SSO & Navigation Workflow ───────────────────────────────────
   (async () => {
