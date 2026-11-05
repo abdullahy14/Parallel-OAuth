@@ -1,43 +1,100 @@
 # Genesys Cloud Auth Token Service
 
-A production-ready, standalone **Next.js 14** microservice that automates authentication into **Genesys Cloud** (PureCloud) through **Microsoft Entra ID (Azure AD) Single Sign-On** using a headless browser session, then securely retrieves and returns the active OAuth Bearer access token.
+A production-ready Next.js microservice that automates authentication into **Genesys Cloud** (PureCloud) through **Microsoft Entra ID (Azure AD) Single Sign-On** using a headless browser session, then securely retrieves and returns the active OAuth Bearer access token as a JSON payload.
 
-Designed for direct deployment to **Vercel** with zero structural changes.
-
----
-
-## Table of Contents
-
-1. [Architecture Overview](#architecture-overview)
-2. [Security Model](#security-model)
-3. [Local Development Setup](#local-development-setup)
-4. [Environment Variables](#environment-variables)
-5. [API Reference](#api-reference)
-6. [GitHub Repository Setup](#github-repository-setup)
-7. [Vercel Deployment](#vercel-deployment)
-8. [Troubleshooting](#troubleshooting)
+Designed for direct deployment to **Vercel** and stored on GitHub: [github.com/abdullahy14/Parallel-OAuth](https://github.com/abdullahy14/Parallel-OAuth).
 
 ---
 
-## Architecture Overview
+## Key Features
+
+1. **12-Hour Token Validity:** Tokens remain valid for **12 hours** (`TOKEN_TTL_MS = 12 * 60 * 60 * 1000`). Once the Bearer token is passed to the client, the client manages it directly.
+2. **Interactive Frontend Login UI / Popup Modal:**
+   - Beautiful dark-mode modal portal hosted at `/`.
+   - Users can enter credentials manually.
+   - Shows real-time progress stages as headless Chromium handles SSO.
+   - Instant token display with copy options: **Copy Bearer Token** and **Copy Full JSON Payload**.
+   - If opened in a popup window (`window.open`), automatically broadcasts the JSON payload via `window.opener.postMessage`.
+3. **Headless SSO Automation:** Runs isolated Chromium instances on Vercel serverless functions using `@sparticuz/chromium-min` and `puppeteer-core`.
+4. **Dual Retrieval Strategy:** Network interceptor (`Authorization: Bearer ...`) and storage scanner (`localStorage` / `sessionStorage`).
+5. **Programmatic API:** Server-to-server endpoint at `/api/fetch-token` guarded by `x-api-key`.
+
+---
+
+## Architecture & Workflows
+
+### Workflow 1: Manual Frontend Login (Interactive Portal)
 
 ```
-Caller ──► POST /api/fetch-token ──► Token Cache (45 min TTL)
-                │                           │ HIT → return token
-                │                           │ MISS ↓
-                └──► Headless Chromium ──► login.mypurecloud.com
-                                      ──► login.microsoftonline.com (Entra ID)
-                                      ──► Network interception / storage scan
-                                      ──► Bearer token extracted & cached
+User visits / ──► Types Email & Password ──► POST /api/login
+                                                     │
+                                                     ▼
+                                        Headless Chromium SSO
+                                                     │
+                                                     ▼
+                                         Bearer Token Extracted
+                                                     │
+                                        ┌────────────┴────────────┐
+                                        ▼                         ▼
+                              Displays Token in UI       Dispatches JSON via
+                             (with 12h countdown)    window.opener.postMessage
 ```
 
-### Token capture strategy (both run simultaneously)
+#### Integrating into another Frontend as a Popup
 
-| Method | Mechanism |
-|--------|-----------|
-| **Network observation** | `page.on("request")` intercepts `Authorization: Bearer …` headers sent to `*.mypurecloud.com` |
-| **URL fragment capture** | `page.on("framenavigated")` watches for `#access_token=…` in redirect URLs |
-| **Storage inspection** | After login, `localStorage` / `sessionStorage` are searched for token values |
+You can open this service as a popup from any other web app:
+
+```javascript
+// 1. Open popup window
+const popup = window.open(
+  "https://your-deployment.vercel.app",
+  "GenesysAuthPopup",
+  "width=520,height=680,centerscreen=yes"
+);
+
+// 2. Listen for the token JSON
+window.addEventListener("message", (event) => {
+  if (event.data?.type === "GENESYS_AUTH_SUCCESS") {
+    const { token, expiresAt, cachedUntil } = event.data.data;
+    console.log("Received Genesys token:", token);
+    console.log("Token expires at:", new Date(expiresAt));
+
+    // Store in your client application (valid for 12 hours)
+    localStorage.setItem("genesys_bearer_token", token);
+
+    // Optional: close the popup
+    popup?.close();
+  }
+});
+```
+
+---
+
+### Workflow 2: Programmatic API (`/api/fetch-token`)
+
+For backend-to-backend calls requiring an API key:
+
+```bash
+curl -X POST "https://your-deployment.vercel.app/api/fetch-token" \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: YOUR_INTERNAL_API_KEY" \
+  -d '{
+    "email": "user@hellofresh.com",
+    "password": "SecretPassword"
+  }'
+```
+
+#### JSON Response Format
+
+```json
+{
+  "success": true,
+  "token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "source": "network-header",
+  "expiresAt": 1793910000000,
+  "cachedUntil": "2026-11-06T10:30:00.000Z"
+}
+```
 
 ---
 
@@ -45,290 +102,54 @@ Caller ──► POST /api/fetch-token ──► Token Cache (45 min TTL)
 
 | Constraint | Enforcement |
 |---|---|
-| Fixed login URL | `STRICT_LOGIN_URL` is hardcoded; never read from config, env, or request |
-| Custom URL rejection | Any request body containing `loginUrl`, `url`, `targetUrl`, or `authUrl` returns `400` |
-| Allowed redirect domains | Only `*.mypurecloud.com`, `login.microsoftonline.com`, `*.microsoft.com`, `*.live.com` |
-| API key gate | Every request must carry `x-api-key` matching `INTERNAL_API_KEY` |
-| Resource isolation | Chromium process is always closed in a `finally` block |
-
----
-
-## Local Development Setup
-
-### Prerequisites
-
-- Node.js ≥ 18.17.0
-- Google Chrome installed (the local fallback)
-- npm / yarn / pnpm
-
-### Steps
-
-```bash
-# 1. Clone the repository
-git clone https://github.com/<your-org>/genesys-auth-token-service.git
-cd genesys-auth-token-service
-
-# 2. Install dependencies
-npm install
-
-# 3. Configure environment variables
-cp .env.example .env.local
-# Edit .env.local and fill in all three values (see Environment Variables below)
-
-# 4. Start the development server
-npm run dev
-```
-
-The service will be available at `http://localhost:3000`.
-
-> **Note for Windows users:** Chrome is typically found at  
-> `C:\Program Files\Google\Chrome\Application\chrome.exe`  
-> This path is included in the automatic search list, so no extra config is needed.
+| **Fixed Login Entry Point** | Hardcoded to `https://login.mypurecloud.com/#/authenticate-adv/org/hellofresh`. Never configurable. |
+| **Custom URL Rejection** | Any request specifying a custom URL (`loginUrl`, `url`, `targetUrl`, `authUrl`) returns `400 Bad Request`. |
+| **Whitelisted SSO Domains** | Only `*.mypurecloud.com`, `login.microsoftonline.com`, `*.microsoft.com`, `*.live.com`. |
+| **API Key Gate** | Programmatic `/api/fetch-token` requires valid `x-api-key`. |
+| **Resource Isolation** | Chromium process guaranteed to close in `try...finally` block. |
 
 ---
 
 ## Environment Variables
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `INTERNAL_API_KEY` | ✅ | Secret key callers must supply via `x-api-key` header. Generate with: `openssl rand -hex 32` |
-| `GENESIS_USER_EMAIL` | ✅ | Genesys Cloud / Entra ID account email address |
-| `GENESIS_USER_PASSWORD` | ✅ | Corresponding password |
+Copy `.env.example` to `.env.local`:
 
-**`.env.local` (never commit this file):**
 ```env
-INTERNAL_API_KEY=your-secret-key-here
-GENESIS_USER_EMAIL=user@yourorg.com
-GENESIS_USER_PASSWORD=YourSecurePassword
+INTERNAL_API_KEY=your-random-32-char-secret-key
+GENESIS_USER_EMAIL=user@hellofresh.com
+GENESIS_USER_PASSWORD=YourPassword
 ```
+
+*(Note: `GENESIS_USER_EMAIL` and `GENESIS_USER_PASSWORD` are optional if you provide credentials dynamically in the UI or in the POST request body).*
 
 ---
 
-## API Reference
-
-### Endpoint
-
-```
-/api/fetch-token
-```
-
-### Authentication
-
-All requests require the header:
-
-```http
-x-api-key: <INTERNAL_API_KEY>
-```
-
-Missing or incorrect key → `401 Unauthorized`.
-
----
-
-### `GET /api/fetch-token`
-
-Returns the cached token (if valid) or performs a fresh login using environment-variable credentials.
-
-#### Query Parameters
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `forceRefresh` | `boolean` | Set to `true` to bypass cache and force a fresh login |
-
-#### Examples
-
-**Retrieve cached token:**
-```bash
-curl -X GET "https://your-deployment.vercel.app/api/fetch-token" \
-  -H "x-api-key: your-secret-key"
-```
-
-**Force a fresh token:**
-```bash
-curl -X GET "https://your-deployment.vercel.app/api/fetch-token?forceRefresh=true" \
-  -H "x-api-key: your-secret-key"
-```
-
-**JavaScript (fetch):**
-```javascript
-const res = await fetch("https://your-deployment.vercel.app/api/fetch-token", {
-  method: "GET",
-  headers: { "x-api-key": "your-secret-key" },
-});
-const data = await res.json();
-console.log(data.token); // Bearer token string
-```
-
----
-
-### `POST /api/fetch-token`
-
-Accepts optional credentials in the request body, falling back to environment variables.
-
-#### Request Body (optional)
-
-```json
-{
-  "email": "user@yourorg.com",
-  "password": "YourSecurePassword"
-}
-```
-
-#### Example
+## Local Development
 
 ```bash
-curl -X POST "https://your-deployment.vercel.app/api/fetch-token" \
-  -H "Content-Type: application/json" \
-  -H "x-api-key: your-secret-key" \
-  -d '{"email":"user@yourorg.com","password":"YourSecurePassword"}'
+# 1. Install dependencies
+npm install
+
+# 2. Type-check
+npm run type-check
+
+# 3. Start local server
+npm run dev
 ```
 
-#### Rejected body (returns 400)
-
-```json
-{ "loginUrl": "https://evil.com" }
-```
-
----
-
-### Success Response `200`
-
-```json
-{
-  "success": true,
-  "token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "source": "network-header",
-  "cachedUntil": "2025-01-01T12:45:00.000Z"
-}
-```
-
-| Field | Description |
-|-------|-------------|
-| `token` | The Bearer access token string |
-| `source` | Where the token was captured: `cache`, `network-header`, `url-fragment`, or `storage` |
-| `cachedUntil` | ISO timestamp when the cached token expires |
-
-### Error Responses
-
-| Status | Meaning |
-|--------|---------|
-| `400` | Missing/invalid credentials or disallowed request field |
-| `401` | Missing or invalid `x-api-key` |
-| `500` | Authentication succeeded but token not found — check `debugStorage` |
-
-**Debug response (500):**
-```json
-{
-  "success": false,
-  "error": "Authentication completed but no Bearer token was found.",
-  "debugStorage": {
-    "localStorage": { "key": "value", "..." : "..." },
-    "sessionStorage": {}
-  }
-}
-```
-
----
-
-## GitHub Repository Setup
-
-```bash
-# In the project directory:
-git init
-git add .
-git commit -m "feat: initial production-ready Genesys auth token service"
-
-# Create repository on GitHub, then:
-git remote add origin https://github.com/<your-org>/genesys-auth-token-service.git
-git branch -M main
-git push -u origin main
-```
-
-> ⚠️ Ensure `.env.local` is in `.gitignore` (it is by default). Never push real credentials.
+Visit `http://localhost:3000` to use the manual login portal.
 
 ---
 
 ## Vercel Deployment
 
-### Method 1: Vercel Dashboard (Recommended)
-
-1. Push your repository to GitHub.
-2. Go to [vercel.com/new](https://vercel.com/new).
-3. Import the GitHub repository.
-4. Set the **Framework Preset** to `Next.js`.
-5. Under **Environment Variables**, add:
+1. Go to [vercel.com/new](https://vercel.com/new).
+2. Import the GitHub repository: `abdullahy14/Parallel-OAuth`.
+3. Set environment variable:
    - `INTERNAL_API_KEY`
-   - `GENESIS_USER_EMAIL`
-   - `GENESIS_USER_PASSWORD`
-6. Click **Deploy**.
+4. Click **Deploy**.
 
-### Method 2: Vercel CLI
-
-```bash
-npm install -g vercel
-
-# First deployment
-vercel
-
-# Production deployment
-vercel --prod
-```
-
-Set environment variables via CLI:
-```bash
-vercel env add INTERNAL_API_KEY production
-vercel env add GENESIS_USER_EMAIL production
-vercel env add GENESIS_USER_PASSWORD production
-```
-
-### Vercel Function Configuration
-
-The `vercel.json` already configures the token endpoint with:
-- **Memory:** 3008 MB
-- **Max Duration:** 60 seconds
-
-These settings are required because headless Chromium is memory-intensive.
-
----
-
-## Troubleshooting
-
-### `No local Chrome executable found`
-
-Install Google Chrome, or set the path explicitly in `.env.local`:
-```env
-CHROME_EXECUTABLE_PATH=/usr/bin/google-chrome
-```
-
-### Token not found — `debugStorage` is empty
-
-The SSO flow may have changed. Check:
-1. The Genesys login page still redirects via `STRICT_LOGIN_URL`.
-2. Entra ID login selectors (`input[name="loginfmt"]`, `input[name="passwd"]`) still match.
-3. Consider increasing timeouts in `route.ts` if authentication is slow.
-
-### `401 Unauthorized`
-
-Verify the `x-api-key` header value matches `INTERNAL_API_KEY` exactly (no trailing spaces, correct casing).
-
-### Vercel timeout / out of memory
-
-- Chromium download (`CHROMIUM_REMOTE_URL`) may be slow on first cold start. The 60-second function timeout accommodates this.
-- If still timing out, consider pinning to a faster CDN mirror for the Chromium binary.
-
-### CORS errors from browser
-
-The service returns `Access-Control-Allow-Origin: *`. If your security policy requires a specific origin, modify `CORS_HEADERS` in `route.ts`.
-
-### Chromium version mismatch
-
-If `puppeteer-core` and `@sparticuz/chromium-min` versions diverge, Chromium may refuse to launch. Keep them in sync:
-
-| puppeteer-core | @sparticuz/chromium-min |
-|---|---|
-| 22.x | 123.x |
-
----
-
-## License
-
-MIT
+`vercel.json` already specifies:
+- 3008 MB RAM
+- 60s max execution duration
+- Zero-cache headers for `/api/*`

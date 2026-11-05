@@ -3,11 +3,15 @@
     "src/app/api/fetch-token/route.ts": {
       "memory": 3008,
       "maxDuration": 60
+    },
+    "src/app/api/login/route.ts": {
+      "memory": 3008,
+      "maxDuration": 60
     }
   },
   "headers": [
     {
-      "source": "/api/fetch-token",
+      "source": "/api/(.*)",
       "headers": [
         {
           "key": "Cache-Control",
