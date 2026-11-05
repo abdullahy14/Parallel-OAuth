@@ -25,7 +25,7 @@ export default function Home() {
   const [copied, setCopied] = useState(false);
   const [copiedJson, setCopiedJson] = useState(false);
   const [showJson, setShowJson] = useState(false);
-  const [showToken, setShowToken] = useState(false);
+  const [showToken, setShowToken] = useState(true);
   const [timeLeft, setTimeLeft] = useState<number | null>(null);
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
@@ -35,6 +35,32 @@ export default function Home() {
 
   const screenContainerRef = useRef<HTMLDivElement | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
+
+  // Restore token from localStorage or backend cache on page load
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("genesys_captured_token");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && parsed.expiresAt > Date.now()) {
+          setTokenData(parsed);
+          return;
+        }
+      }
+    } catch {}
+
+    fetch("/api/stream?checkToken=true")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data && data.success && data.token) {
+          setTokenData(data);
+          try {
+            localStorage.setItem("genesys_captured_token", JSON.stringify(data));
+          } catch {}
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   // Expiry countdown timer
   useEffect(() => {
@@ -57,7 +83,6 @@ export default function Home() {
   function startSession(emailOverride?: string, passwordOverride?: string) {
     setSessionActive(true);
     setErrorMsg(null);
-    setTokenData(null);
     setFrameSrc(null);
     setActionStatus(null);
     setStatusMsg("Booting cloud browser session on Vercel...");
@@ -86,6 +111,9 @@ export default function Home() {
           setStatusMsg(event.data);
         } else if (event.type === "token" && event.tokenPayload) {
           setTokenData(event.tokenPayload);
+          try {
+            localStorage.setItem("genesys_captured_token", JSON.stringify(event.tokenPayload));
+          } catch {}
           setSessionActive(false);
           es.close();
 
@@ -310,39 +338,36 @@ export default function Home() {
           <div
             style={{
               background: "#080c18",
-              border: "1px solid #1e293b",
-              borderRadius: 8,
-              padding: 12,
-              marginBottom: 14,
+              border: "1px solid #16a34a",
+              borderRadius: 10,
+              padding: 14,
+              marginBottom: 16,
             }}
           >
-            <div style={{ fontSize: 12, color: "#64748b", marginBottom: 6 }}>Bearer Access Token:</div>
-            <div
-              style={{
-                fontFamily: "monospace",
-                fontSize: 12,
-                color: "#7dd3fc",
-                wordBreak: "break-all",
-                maxHeight: 120,
-                overflowY: "auto",
-              }}
-            >
-              {showToken ? tokenData.token : `${tokenData.token.slice(0, 30)}••••••••••••••••••••••••••••••••`}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: "#86efac" }}>🔑 Full Bearer Access Token:</span>
+              <span style={{ fontSize: 11, color: "#94a3b8" }}>Click inside to select all</span>
             </div>
-            <button
-              onClick={() => setShowToken(!showToken)}
+            <textarea
+              readOnly
+              value={tokenData.token}
+              onClick={(e) => (e.target as HTMLTextAreaElement).select()}
               style={{
-                background: "none",
-                border: "none",
-                color: "#38bdf8",
-                cursor: "pointer",
+                width: "100%",
+                height: 110,
+                fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
                 fontSize: 12,
-                marginTop: 6,
-                padding: 0,
+                color: "#67e8f9",
+                background: "#030712",
+                border: "1px solid #334155",
+                borderRadius: 8,
+                padding: 10,
+                resize: "vertical",
+                boxSizing: "border-box",
+                outline: "none",
+                wordBreak: "break-all",
               }}
-            >
-              {showToken ? "Hide full token" : "Reveal full token"}
-            </button>
+            />
           </div>
 
           <div style={{ fontSize: 13, color: "#94a3b8", marginBottom: 16 }}>

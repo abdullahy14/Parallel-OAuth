@@ -7,10 +7,26 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { startInteractiveSession, getCurrentSession, StreamEvent } from "@/lib/browser-session";
+import { getCachedToken, getCacheExpiry } from "@/lib/genesys-token";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
+  if (req.nextUrl.searchParams.get("checkToken") === "true") {
+    const cached = getCachedToken();
+    const expiry = getCacheExpiry();
+    if (cached && expiry) {
+      return NextResponse.json({
+        success: true,
+        token: cached,
+        source: "cache",
+        expiresAt: expiry,
+        cachedUntil: new Date(expiry).toISOString(),
+      });
+    }
+    return NextResponse.json({ error: "No cached token found" }, { status: 404 });
+  }
+
   const mode = (req.nextUrl.searchParams.get("mode") as "screencast" | "native") || "screencast";
   const email = req.nextUrl.searchParams.get("email") || undefined;
   const password = req.nextUrl.searchParams.get("password") || undefined;
