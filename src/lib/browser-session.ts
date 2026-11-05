@@ -145,61 +145,102 @@ export async function startInteractiveSession(
     }, 1500);
   }
 
-  // 1. Intercept Bearer tokens from outgoing requests
-  page.on("request", (req) => {
-    if (capturedToken) return;
-    const auth = req.headers()["authorization"] ?? req.headers()["Authorization"];
-    if (auth?.startsWith("Bearer ")) {
-      const candidate = auth.slice(7).trim();
-      if (candidate.length > 20) {
-        onTokenFound(candidate, "network-header");
+  // Helper to attach interceptors to any page (including popups/new tabs)
+  function attachPageListeners(p: Page) {
+    p.on("request", (req) => {
+      if (capturedToken) return;
+      const auth = req.headers()["authorization"] ?? req.headers()["Authorization"];
+      if (auth?.startsWith("Bearer ")) {
+        const candidate = auth.slice(7).trim();
+        if (candidate.length > 20) {
+          onTokenFound(candidate, "network-header");
+        }
       }
+    });
+
+    p.on("framenavigated", (frame) => {
+      if (capturedToken) return;
+      const url = frame.url();
+      const match = url.match(/[#&]access_token=([^&]+)/i);
+      if (match) {
+        onTokenFound(decodeURIComponent(match[1]), "url-fragment");
+      }
+    });
+  }
+
+  // Attach to initial page
+  attachPageListeners(page);
+
+  // Attach to any new tab or popup opened by the browser
+  browser.on("targetcreated", async (target) => {
+    if (capturedToken) return;
+    try {
+      const newPage = await target.page();
+      if (!newPage) return;
+      attachPageListeners(newPage);
+    } catch {
+      // ignore
     }
   });
 
-  // 2. Intercept OAuth URL fragment tokens (#access_token=...)
-  page.on("framenavigated", (frame) => {
-    if (frame !== page.mainFrame() || capturedToken) return;
-    const url = frame.url();
-    const match = url.match(/[#&]access_token=([^&]+)/i);
-    if (match) {
-      onTokenFound(decodeURIComponent(match[1]), "url-fragment");
-    }
-  });
-
-  // 3. Periodic storage inspector
+  // 3. Periodic storage inspector (inspects all open pages and cookies)
   const storageInterval = setInterval(async () => {
     if (capturedToken || session.isClosed) {
       clearInterval(storageInterval);
       return;
     }
     try {
-      const token = await page.evaluate(() => {
-        const TOKEN_KEYS = /access_token|auth_token|token/i;
-        for (let i = 0; i < localStorage.length; i++) {
-          const k = localStorage.key(i);
-          if (k && TOKEN_KEYS.test(k)) {
-            const v = localStorage.getItem(k);
-            if (v && v.length > 20 && !v.startsWith("{")) return v;
-          }
-        }
-        for (let i = 0; i < sessionStorage.length; i++) {
-          const k = sessionStorage.key(i);
-          if (k && TOKEN_KEYS.test(k)) {
-            const v = sessionStorage.getItem(k);
-            if (v && v.length > 20 && !v.startsWith("{")) return v;
-          }
-        }
-        return null;
-      });
+      const pages = await browser.pages();
+      for (const p of pages) {
+        if (capturedToken) break;
 
-      if (token) {
-        onTokenFound(token, "storage");
+        const url = p.url();
+        const match = url.match(/[#&]access_token=([^&]+)/i);
+        if (match) {
+          onTokenFound(decodeURIComponent(match[1]), "url-fragment");
+          break;
+        }
+
+        const token = await p.evaluate(() => {
+          const TOKEN_KEYS = /access_token|auth_token|token/i;
+          for (let i = 0; i < localStorage.length; i++) {
+            const k = localStorage.key(i);
+            if (k && TOKEN_KEYS.test(k)) {
+              const v = localStorage.getItem(k);
+              if (v && v.length > 20 && !v.startsWith("{")) return v;
+            }
+          }
+          for (let i = 0; i < sessionStorage.length; i++) {
+            const k = sessionStorage.key(i);
+            if (k && TOKEN_KEYS.test(k)) {
+              const v = sessionStorage.getItem(k);
+              if (v && v.length > 20 && !v.startsWith("{")) return v;
+            }
+          }
+          return null;
+        }).catch(() => null);
+
+        if (token) {
+          onTokenFound(token, "storage");
+          break;
+        }
+      }
+
+      if (!capturedToken) {
+        const cookies = await page.cookies();
+        for (const c of cookies) {
+          if (/inin.*auth.*token|access_token/i.test(c.name) && c.value.length > 25) {
+            if (!c.value.startsWith("{") && !c.value.includes("%7B")) {
+              onTokenFound(c.value, `cookie:${c.name}`);
+              break;
+            }
+          }
+        }
       }
     } catch {
       // frame might be navigating
     }
-  }, 1500);
+  }, 1000);
 
   browser.on("disconnected", () => {
     clearInterval(storageInterval);
@@ -485,9 +526,15 @@ export async function startInteractiveSession(
               // ignore
             }
 
-            // 2. Click Collaborate / Communicate card if on portal landing page
+            // 2. Click Collaborate / Communicate or navigate directly to Collaborate app
             if (!capturedToken) {
               const clickedApp = await page.evaluate(() => {
+                document.querySelectorAll("a").forEach((a) => a.removeAttribute("target"));
+                window.open = function(url?: string | URL) {
+                  if (url) window.location.href = url.toString();
+                  return window;
+                };
+
                 const elements = Array.from(document.querySelectorAll("a, button, div, span, [role='button']")) as HTMLElement[];
                 const card = elements.find((el) => {
                   const text = (el.textContent || "").trim();
@@ -499,21 +546,24 @@ export async function startInteractiveSession(
                   return true;
                 }
                 return false;
-              });
+              }).catch(() => false);
 
               if (clickedApp) {
                 session.onEvent?.({
                   type: "status",
                   data: "Launching Collaborate app to extract OAuth Bearer token...",
                 });
-                await new Promise((r) => setTimeout(r, 2500));
-              } else if (pageState.url.includes("login.mypurecloud.com")) {
+                await new Promise((r) => setTimeout(r, 1500));
+              }
+
+              // Direct navigation fallback: navigate straight to Collaborate directory
+              if (!capturedToken && page.url().includes("login.mypurecloud.com")) {
                 session.onEvent?.({
                   type: "status",
                   data: "Navigating to Collaborate app to retrieve OAuth token...",
                 });
-                await page.goto("https://apps.mypurecloud.com/", { waitUntil: "domcontentloaded", timeout: 15_000 }).catch(() => {});
-                await new Promise((r) => setTimeout(r, 2000));
+                await page.goto("https://apps.mypurecloud.com/directory/#/", { waitUntil: "domcontentloaded", timeout: 15_000 }).catch(() => {});
+                await new Promise((r) => setTimeout(r, 1500));
               }
             }
           }

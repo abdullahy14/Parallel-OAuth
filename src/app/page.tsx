@@ -138,9 +138,22 @@ export default function Home() {
     };
 
     es.onerror = () => {
-      if (!tokenData) {
-        setStatusMsg("Connection closed or ended.");
-      }
+      fetch("/api/stream?checkToken=true")
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (data && data.success && data.token) {
+            setTokenData(data);
+            try {
+              localStorage.setItem("genesys_captured_token", JSON.stringify(data));
+            } catch {}
+            setSessionActive(false);
+          } else if (!tokenData) {
+            setStatusMsg("Session ended. Re-launch if authentication was not finished.");
+          }
+        })
+        .catch(() => {
+          if (!tokenData) setStatusMsg("Session ended.");
+        });
       es.close();
     };
   }
